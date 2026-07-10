@@ -168,7 +168,7 @@ export function WordpressPostButton({
                 <img src={preview.imageUrl} alt="" className="max-h-40 w-full rounded-lg object-cover" />
               )}
               <div className="space-y-1.5">
-                <Label htmlFor="wp-title">Tiêu đề (đã rút gọn ~2 dòng — sửa được)</Label>
+                <Label htmlFor="wp-title">Tiêu đề (giữ nguyên từ bài gốc — sửa được)</Label>
                 <Textarea id="wp-title" rows={2} value={title} onChange={(e) => setTitle(e.target.value)} />
               </div>
               <div className="space-y-1">

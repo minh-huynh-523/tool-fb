@@ -31,16 +31,17 @@ function cleanDescription(s: string): string {
   return (sp > 0 ? cut.slice(0, sp) : cut) + '…';
 }
 
-// Rút gọn tiêu đề clickbait dài xuống ~2 dòng (~90 ký tự). Ưu tiên cắt ở dấu phân
-// tách mạnh (— – | ·), nếu không thì cắt ở ranh giới từ. Tiêu đề vẫn sửa được ở UI.
-function shortenTitle(raw: string): string {
-  const t = raw.replace(/\s+/g, ' ').trim();
-  if (t.length <= 90) return t; // đã đủ ngắn (~2 dòng)
-  const sep = t.search(/\s[—–|·]\s/); // dấu phân tách hook/subtitle (không tính ':' vì quá generic)
-  if (sep >= 40 && sep <= 110) return t.slice(0, sep).trim();
-  const cut = t.slice(0, 90);
-  const sp = cut.lastIndexOf(' ');
-  return (sp > 40 ? cut.slice(0, sp) : cut).trim();
+// Giữ NGUYÊN độ dài tiêu đề (cắt ngắn là mất keyword, hại SEO) — chỉ normalize whitespace.
+function cleanTitle(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim();
+}
+
+// document.title thường có đuôi " | Site Name" / " — Site Name". Chỉ bỏ đuôi khi khớp
+// đúng og:site_name, tránh cắt nhầm subtitle thật của bài.
+function stripSiteSuffix(title: string, siteName: string | null): string {
+  if (!siteName) return title;
+  const esc = siteName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return title.replace(new RegExp(`\\s*[-–—|·»]\\s*${esc}\\s*$`, 'i'), '');
 }
 
 async function fetchDoc(url: string): Promise<Document> {
@@ -107,6 +108,7 @@ export async function scrapeArticle(rawUrl: string): Promise<ScrapedArticle> {
   const ogTitle = meta('meta[property="og:title"]');
   const ogDesc = meta('meta[property="og:description"]') ?? meta('meta[name="description"]');
   const ogImage = meta('meta[property="og:image"]') ?? meta('meta[name="twitter:image"]');
+  const siteName = meta('meta[property="og:site_name"]');
   const docTitle = firstDoc.title?.trim() || null;
 
   let contentHtml = '';
@@ -163,7 +165,7 @@ export async function scrapeArticle(rawUrl: string): Promise<ScrapedArticle> {
   }
   if (!contentHtml) throw new Error('Không cào được nội dung từ URL này (site chặn hoặc không đọc được bài).');
 
-  const title = shortenTitle(ogTitle || docTitle || '');
+  const title = ogTitle ? cleanTitle(ogTitle) : cleanTitle(stripSiteSuffix(docTitle || '', siteName));
   const description = cleanDescription(ogDesc || firstText || '');
   const imageUrl = ogImage || featured;
 

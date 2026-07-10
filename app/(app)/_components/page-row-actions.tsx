@@ -24,6 +24,7 @@ export function PageRowActions({ pageId }: { pageId: string }) {
       }
     } catch (e) {
       toast.error((e as Error).message);
+      console.log(e)
       setNote({ type: "err", text: (e as Error).message });
     } finally {
       setBusy("");

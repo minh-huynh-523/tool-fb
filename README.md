@@ -61,14 +61,22 @@ npm run dev        # http://localhost:3000
 2. Khai **tất cả** biến env ở **Project Settings → Environment Variables**.
 3. Deploy. Test lại luồng trên domain `*.vercel.app`.
 
-### Cron safety-net (đăng nốt comment sót)
-Tạo job ở [cron-job.org](https://cron-job.org) (free) gọi mỗi 1–5 phút:
+### Cron production (bắt buộc — comment hẹn giờ + sync tự động)
+
+App serverless **không có đồng hồ nền** — comment hẹn giờ chỉ được gửi khi có request gõ vào endpoint cron. Ticker chạy **ngay trong Supabase** (pg_cron + pg_net), không cần dịch vụ thứ ba:
+
+1. Deploy xong, lấy URL production.
+2. Mở `supabase/migrations/0005_pg_cron_sync.sql`, thay `<APP_URL>` + `<CRON_SECRET>` → dán vào **Supabase SQL Editor** chạy.
+3. Job `fb-dashboard-sync` sẽ gọi mỗi phút:
 
 ```
-GET https://<app>.vercel.app/api/cron/process-comments?secret=<CRON_SECRET>
+GET https://<app>.vercel.app/api/cron/sync-pages?secret=<CRON_SECRET>
 ```
 
-(hoặc header `x-cron-secret: <CRON_SECRET>`). Endpoint quét các comment `PENDING` quá hạn / `PROCESSING` treo và đăng nốt.
+Endpoint này làm trọn 1 vòng: **sync** bài mới + reel lên lịch (Business Suite) → **reconcile** reel vừa publish (Meta đổi post id) → **gửi comment** tới hạn. Kiểm tra: `select * from cron.job_run_details order by start_time desc limit 5;`
+
+> Local dev: pg_net không gọi được localhost — chạy loop giả cron:
+> `while true; do curl -s "http://localhost:3000/api/cron/sync-pages?secret=$CRON_SECRET" >/dev/null; sleep 60; done`
 
 ---
 
@@ -89,7 +97,8 @@ app/
   api/
     pages/ (+[pageId]/sync, [pageId]/test-token, sync-all)
     posts/[postDbId]/comments   inline delay 5s
-    cron/process-comments        safety-net (CRON_SECRET)
+    cron/sync-pages              ticker chính: sync + reconcile + gửi comment (CRON_SECRET)
+    cron/process-comments        chỉ gửi comment (safety-net phụ, CRON_SECRET)
 lib/
   supabase/{server,client,admin}.ts
   facebook/{config,client}.ts

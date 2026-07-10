@@ -22,7 +22,7 @@ select cron.schedule(
   '* * * * *',           -- mỗi phút
   $$
   select net.http_get(
-    url := 'https://tool-fb-seven.vercel.app/api/cron/sync-pages?secret=<CRON_SECRET>',
+    url := 'https://tool-fb-klta.vercel.app/api/cron/sync-pages?secret=<CRON_SECRET>',
     timeout_milliseconds := 55000
   );
   $$

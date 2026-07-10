@@ -11,7 +11,7 @@ export function CollapsibleText({ text }: { text: string }) {
 
   return (
     <div className="space-y-1">
-      <p className={`whitespace-pre-wrap text-foreground/90 ${open || !long ? "" : "line-clamp-3"}`}>{text}</p>
+      <p className={`whitespace-pre-wrap break-words text-foreground/90 ${open || !long ? "" : "line-clamp-3"}`}>{text}</p>
       {long && (
         <Button variant="link" size="sm" className="h-auto p-0" onClick={() => setOpen(!open)}>
           {open ? (

@@ -48,10 +48,13 @@ export function EditCommentButton({
     }
     setLoading(true);
     try {
+      // Chỉ gửi runAt khi user THẬT SỰ đổi giờ — giữ nguyên run_after gốc (kể cả giây buffer).
+      const payload: Record<string, string> = { message, attachmentUrl };
+      if (runAt !== isoToVnLocal(comment.run_after)) payload.runAt = runAt;
       const res = await fetch(`/api/posts/${postDbId}/comments/${comment.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runAt, message, attachmentUrl }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -70,7 +73,19 @@ export function EditCommentButton({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (o) {
+          // Reset draft từ props mỗi lần mở — không giữ ngầm bản sửa dở đã huỷ lần trước.
+          setMessage(comment.message);
+          setAttachmentUrl(comment.attachment_url ?? "");
+          setRunAt(isoToVnLocal(comment.run_after));
+          setExpanded(false);
+        }
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" aria-label="Sửa lịch comment">
           <Pencil /> Sửa

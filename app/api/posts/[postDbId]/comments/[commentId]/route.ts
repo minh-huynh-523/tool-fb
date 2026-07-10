@@ -66,11 +66,19 @@ export async function PATCH(
 
   const { postDbId, commentId } = await params;
 
-  let body: { runAt?: string; message?: string; attachmentUrl?: string };
+  let body: { runAt?: unknown; message?: unknown; attachmentUrl?: unknown };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Body JSON không hợp lệ" }, { status: 400 });
+  }
+  if (typeof body !== "object" || body === null) {
+    return NextResponse.json({ error: "Body JSON không hợp lệ" }, { status: 400 });
+  }
+  for (const k of ["runAt", "message", "attachmentUrl"] as const) {
+    if (body[k] !== undefined && typeof body[k] !== "string") {
+      return NextResponse.json({ error: `Trường ${k} phải là chuỗi` }, { status: 400 });
+    }
   }
 
   const db = createSupabaseAdmin();
@@ -95,35 +103,54 @@ export async function PATCH(
 
   // Giờ hẹn: "" = đăng ngay (run_after = now); có giá trị = giờ VN "YYYY-MM-DDTHH:mm".
   if (body.runAt !== undefined) {
-    const runAt = body.runAt.trim();
+    const runAt = (body.runAt as string).trim();
     if (runAt) {
-      const iso = vnLocalToISO(runAt);
+      let iso: string;
+      try {
+        iso = vnLocalToISO(runAt);
+      } catch {
+        return NextResponse.json({ error: "Giờ hẹn không hợp lệ" }, { status: 400 });
+      }
       if (Number.isNaN(new Date(iso).getTime())) {
         return NextResponse.json({ error: "Giờ hẹn không hợp lệ" }, { status: 400 });
       }
       update.run_after = iso;
     } else {
+      // "Đăng ngay" — chặn với bài chưa lên sóng & chưa rõ giờ đăng (giống guard ở POST).
+      const { data: post } = await db
+        .from("post")
+        .select("is_published, scheduled_publish_time")
+        .eq("id", postDbId)
+        .maybeSingle();
+      const p = post as { is_published: boolean; scheduled_publish_time: string | null } | null;
+      if (p && !p.is_published && !p.scheduled_publish_time) {
+        return NextResponse.json(
+          { error: 'Bài này đang lên lịch nhưng chưa rõ giờ đăng — hãy chọn "Đăng comment lúc" (sau giờ bài lên sóng).' },
+          { status: 400 },
+        );
+      }
       update.run_after = new Date().toISOString();
     }
   }
-  if (body.message !== undefined) update.message = body.message.trim();
-  if (body.attachmentUrl !== undefined) update.attachment_url = body.attachmentUrl.trim() || null;
+  if (body.message !== undefined) update.message = (body.message as string).trim();
+  if (body.attachmentUrl !== undefined) update.attachment_url = (body.attachmentUrl as string).trim() || null;
 
-  // Sau update phải còn nội dung hoặc link.
-  const finalMessage = (update.message as string | undefined) ?? row.message;
-  const finalAttachment = (update.attachment_url as string | null | undefined) ?? row.attachment_url;
+  if (Object.keys(update).length === 0) {
+    return NextResponse.json({ error: "Không có gì để cập nhật" }, { status: 400 });
+  }
+
+  // Sau update phải còn nội dung hoặc link ("in" check — vì attachment_url có thể là null hợp lệ).
+  const finalMessage = "message" in update ? (update.message as string) : row.message;
+  const finalAttachment = "attachment_url" in update ? (update.attachment_url as string | null) : row.attachment_url;
   if (!finalMessage && !finalAttachment) {
     return NextResponse.json({ error: "Cần nội dung hoặc link đính kèm" }, { status: 400 });
   }
 
-  // FAILED -> cho chạy lại với lịch mới.
+  // FAILED -> cho chạy lại với lịch mới (chỉ khi có thay đổi thật — check rỗng đã nằm phía trên).
   if (row.status === "FAILED") {
     update.status = "PENDING";
     update.error = null;
     update.claimed_at = null;
-  }
-  if (Object.keys(update).length === 0) {
-    return NextResponse.json({ error: "Không có gì để cập nhật" }, { status: 400 });
   }
 
   const { data: updated, error: upErr } = await db

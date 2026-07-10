@@ -129,12 +129,18 @@ export async function syncPage(pageId: string, opts: { limit?: number } = {}): P
     const feedItems = feed.data ?? [];
     const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
     const reelToPostId = new Map<string, string>();
-    const msgToPostId = new Map<string, string>();
+    // Message match phải DUY NHẤT 2 chiều (1 bài live ↔ 1 placeholder) — caption template trùng
+    // nhau giữa nhiều bài sẽ bị bỏ qua thay vì retarget nhầm bài.
+    const msgCandidates = new Map<string, { id: string; n: number }>();
     for (const item of feedItems) {
       const m = item.permalink_url?.match(/\/reel\/(\d+)/);
       if (m) reelToPostId.set(m[1], item.id);
       const nm = norm(item.message);
-      if (nm) msgToPostId.set(nm, item.id);
+      if (nm) {
+        const c = msgCandidates.get(nm);
+        if (c) c.n++;
+        else msgCandidates.set(nm, { id: item.id, n: 1 });
+      }
     }
     const stillUnpublished = new Set(unpublishedVideos.map((v) => v.id));
     {
@@ -147,12 +153,45 @@ export async function syncPage(pageId: string, opts: { limit?: number } = {}): P
       const placeholders = ((pending ?? []) as { id: string; fb_post_id: string; message: string | null }[]).filter(
         (r) => !r.fb_post_id.includes('_') && !stillUnpublished.has(r.fb_post_id),
       );
+      // Đếm message trùng giữa chính các placeholder — trùng thì không dám match.
+      const phMsgCount = new Map<string, number>();
       for (const ph of placeholders) {
-        const realId = reelToPostId.get(ph.fb_post_id) ?? msgToPostId.get(norm(ph.message));
-        if (!realId || realId === ph.fb_post_id) continue; // chưa thấy bản live (ngoài feed window) -> thử lại lần sync sau
-        await db.from('post').update({ fb_post_id: realId }).eq('id', ph.id);
-        // Comment đã hẹn trỏ theo fb_post_id -> retarget sang post id thật để worker gửi đúng chỗ.
-        await db.from('scheduled_comment').update({ fb_post_id: realId }).eq('post_id', ph.id);
+        const nm = norm(ph.message);
+        if (nm) phMsgCount.set(nm, (phMsgCount.get(nm) ?? 0) + 1);
+      }
+      for (const ph of placeholders) {
+        let realId = reelToPostId.get(ph.fb_post_id);
+        if (!realId) {
+          const nm = norm(ph.message);
+          const cand = nm ? msgCandidates.get(nm) : undefined;
+          if (cand && cand.n === 1 && phMsgCount.get(nm) === 1) realId = cand.id;
+        }
+        if (!realId || realId === ph.fb_post_id) continue; // chưa thấy bản live / match nhập nhằng -> thử lại lần sync sau
+
+        let commentsPostId = ph.id; // uuid mà comment đã hẹn đang trỏ tới (đổi nếu merge)
+        const { error: mvErr } = await db.from('post').update({ fb_post_id: realId }).eq('id', ph.id);
+        if (mvErr) {
+          // Thường là unique violation: row bài live đã tồn tại riêng (sync đua nhau) -> MERGE:
+          // dời comment đã hẹn sang row live rồi xoá placeholder (không nuốt lỗi im lặng nữa).
+          const { data: live } = await db.from('post').select('id').eq('fb_post_id', realId).maybeSingle();
+          if (!live) {
+            warnings.push(`Reconcile ${ph.fb_post_id} -> ${realId} lỗi: ${mvErr.message}`);
+            continue;
+          }
+          commentsPostId = (live as { id: string }).id;
+          await db.from('scheduled_comment').update({ post_id: commentsPostId, fb_post_id: realId }).eq('post_id', ph.id);
+          await db.from('scraped_article').update({ post_id: commentsPostId }).eq('post_id', ph.id); // best-effort (unique post_id)
+          await db.from('post').delete().eq('id', ph.id);
+        } else {
+          // Retarget comment đã hẹn sang post id thật để worker gửi đúng chỗ.
+          await db.from('scheduled_comment').update({ fb_post_id: realId }).eq('post_id', ph.id);
+        }
+        // Comment FAILED (fail vì bắn vào video id chết trước khi reconcile) -> PENDING để thử lại.
+        await db
+          .from('scheduled_comment')
+          .update({ status: 'PENDING', error: null, claimed_at: null })
+          .eq('post_id', commentsPostId)
+          .eq('status', 'FAILED');
       }
     }
 

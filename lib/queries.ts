@@ -58,22 +58,11 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
   const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 20));
 
   // "Chưa comment" = page CHƯA tự comment bài (page_commented=false — dữ liệu thật từ FB).
-  // Đếm tổng (cùng bộ lọc) để phân trang.
-  let countQ = db.from('post').select('id', { count: 'exact', head: true });
-  if (filter.pageId) countQ = countQ.eq('page_id', filter.pageId);
-  if (filter.status === 'PUBLISHED') countQ = countQ.eq('is_published', true);
-  if (filter.status === 'SCHEDULED') countQ = countQ.eq('is_published', false);
-  if (filter.from) countQ = countQ.gte('display_time', filter.from);
-  if (filter.to) countQ = countQ.lte('display_time', filter.to);
-  if (filter.uncommented) countQ = countQ.eq('page_commented', false);
-  const { count } = await countQ;
-  const total = count ?? 0;
-
-  // Lấy dữ liệu trang hiện tại.
+  // count: 'exact' GỘP đếm tổng vào cùng 1 request với data — tiết kiệm 1 round-trip Supabase.
   const offset = (page - 1) * pageSize;
   let dataQ = db
     .from('post')
-    .select(POST_COLUMNS)
+    .select(POST_COLUMNS, { count: 'exact' })
     .order('display_time', { ascending: false, nullsFirst: false })
     .range(offset, offset + pageSize - 1);
   if (filter.pageId) dataQ = dataQ.eq('page_id', filter.pageId);
@@ -83,19 +72,23 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
   if (filter.to) dataQ = dataQ.lte('display_time', filter.to);
   if (filter.uncommented) dataQ = dataQ.eq('page_commented', false);
 
-  const { data: posts, error } = await dataQ;
+  const { data: posts, count, error } = await dataQ;
   if (error) throw error;
+  const total = count ?? 0;
   const list = (posts ?? []) as PostRow[];
   if (!list.length) return { rows: [], total, page, pageSize };
 
-  // Lịch sử comment (của mình) cho các post của trang hiện tại — vừa để đếm badge, vừa để
-  // mở bảng "comment đã lên lịch" ngay trong dòng. Sắp theo giờ hẹn (cũ → mới).
+  // Lịch sử comment (của mình) + bài WP cho các post của trang hiện tại — 2 query độc lập,
+  // chạy SONG SONG để tiết kiệm 1 round-trip Supabase.
   const ids = list.map((p) => p.id);
-  const { data: comments } = await db
-    .from('scheduled_comment')
-    .select('id, post_id, message, attachment_url, run_after, status, sent_at, error, created_at')
-    .in('post_id', ids)
-    .order('run_after', { ascending: true });
+  const [{ data: comments }, { data: scraped }] = await Promise.all([
+    db
+      .from('scheduled_comment')
+      .select('id, post_id, message, attachment_url, run_after, status, sent_at, error, created_at')
+      .in('post_id', ids)
+      .order('run_after', { ascending: true }),
+    db.from('scraped_article').select('post_id, wp_post_id, wp_edit_url, wp_status').in('post_id', ids),
+  ]);
 
   const byPost = new Map<string, Partial<Record<CommentStatus, number>>>();
   const commentsByPost = new Map<string, CommentHistoryRow[]>();
@@ -108,11 +101,6 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
     commentsByPost.set(c.post_id, arr);
   }
 
-  // Bài WordPress đã tạo (nếu có) cho các post của trang hiện tại.
-  const { data: scraped } = await db
-    .from('scraped_article')
-    .select('post_id, wp_post_id, wp_edit_url, wp_status')
-    .in('post_id', ids);
   const wpByPost = new Map<string, PostWithComment['wp']>();
   for (const s of (scraped ?? []) as {
     post_id: string;
@@ -143,19 +131,14 @@ export async function getPostWithComments(postDbId: string): Promise<{
   scraped: { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null } | null;
 } | null> {
   const db = createSupabaseAdmin();
-  const { data: post, error } = await db.from('post').select(POST_COLUMNS).eq('id', postDbId).maybeSingle();
+  // 3 query độc lập (cùng key postDbId) — chạy song song, tiết kiệm 2 round-trip.
+  const [{ data: post, error }, { data: comments }, { data: scraped }] = await Promise.all([
+    db.from('post').select(POST_COLUMNS).eq('id', postDbId).maybeSingle(),
+    db.from('scheduled_comment').select('*').eq('post_id', postDbId).order('created_at', { ascending: false }),
+    db.from('scraped_article').select('wp_post_id, wp_edit_url, wp_status').eq('post_id', postDbId).maybeSingle(),
+  ]);
   if (error) throw error;
   if (!post) return null;
-  const { data: comments } = await db
-    .from('scheduled_comment')
-    .select('*')
-    .eq('post_id', postDbId)
-    .order('created_at', { ascending: false });
-  const { data: scraped } = await db
-    .from('scraped_article')
-    .select('wp_post_id, wp_edit_url, wp_status')
-    .eq('post_id', postDbId)
-    .maybeSingle();
   return {
     post: post as PostRow,
     comments: (comments ?? []) as ScheduledCommentRow[],

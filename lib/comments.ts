@@ -14,8 +14,28 @@ function fmtError(e: unknown): string {
 }
 
 // Gọi FB đăng comment cho 1 row đã được claim (status=PROCESSING) rồi cập nhật SENT/FAILED.
-async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promise<'SENT' | 'FAILED'> {
+// Target được RESOLVE TẠI THỜI ĐIỂM GỬI từ bảng post (post_id uuid ổn định) — vì reel lên lịch
+// Business Suite đổi fb_post_id khi publish; giá trị denormalize trên row có thể đã chết.
+async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promise<'SENT' | 'FAILED' | 'SKIPPED'> {
   try {
+    const { data: postRow } = await db
+      .from('post')
+      .select('fb_post_id')
+      .eq('id', row.post_id)
+      .maybeSingle();
+    const target = (postRow as { fb_post_id: string } | null)?.fb_post_id ?? row.fb_post_id;
+
+    // Vẫn là video-id placeholder (không có "_") = bài CHƯA lên sóng/chưa reconcile.
+    // Đừng bắn (chắc chắn fail) — nhả về PENDING, cron lần sau thử lại sau khi sync reconcile.
+    if (!target.includes('_')) {
+      await db
+        .from('scheduled_comment')
+        .update({ status: 'PENDING', claimed_at: null })
+        .eq('id', row.id)
+        .eq('status', 'PROCESSING');
+      return 'SKIPPED';
+    }
+
     const { data: page, error } = await db
       .from('facebook_page')
       .select('access_token')
@@ -25,32 +45,37 @@ async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promis
     if (!page) throw new Error(`Không tìm thấy page ${row.page_id} trong facebook_page`);
 
     const token = decryptToken((page as { access_token: string }).access_token);
-    const result = await createPostComment(row.fb_post_id, token, {
+    const result = await createPostComment(target, token, {
       message: row.message,
       attachmentUrl: row.attachment_url ?? undefined,
     });
 
+    // Guard status=PROCESSING: worker chậm (bị stale-reclaim đè) không được ghi đè kết quả mới hơn.
     await db
       .from('scheduled_comment')
       .update({ status: 'SENT', fb_comment_id: result.id, sent_at: new Date().toISOString(), error: null })
-      .eq('id', row.id);
+      .eq('id', row.id)
+      .eq('status', 'PROCESSING');
     return 'SENT';
   } catch (e) {
     await db
       .from('scheduled_comment')
       .update({ status: 'FAILED', error: fmtError(e), attempts: (row.attempts ?? 0) + 1 })
-      .eq('id', row.id);
+      .eq('id', row.id)
+      .eq('status', 'PROCESSING');
     return 'FAILED';
   }
 }
 
 // Claim atomic 1 row PENDING -> PROCESSING. Trả về row nếu thắng, null nếu đã bị bên khác claim.
+// Re-check run_after NGAY TRONG claim: PATCH đổi lịch giữa lúc select và claim thì không bắn nhầm lịch cũ.
 async function claimPending(db: SupabaseClient, id: string): Promise<ScheduledCommentRow | null> {
   const { data, error } = await db
     .from('scheduled_comment')
     .update({ status: 'PROCESSING', claimed_at: new Date().toISOString() })
     .eq('id', id)
     .eq('status', 'PENDING')
+    .lte('run_after', new Date().toISOString())
     .select()
     .maybeSingle();
   if (error) throw error;
@@ -114,8 +139,10 @@ export async function processDueComments(
       res.skipped++;
       continue;
     }
-    if ((await sendComment(db, claimed)) === 'SENT') res.sent++;
-    else res.failed++;
+    const r = await sendComment(db, claimed);
+    if (r === 'SENT') res.sent++;
+    else if (r === 'FAILED') res.failed++;
+    else res.skipped++;
   }
   for (const row of (stale ?? []) as ScheduledCommentRow[]) {
     const claimed = await reclaimProcessing(db, row.id, staleCutoff);
@@ -123,8 +150,10 @@ export async function processDueComments(
       res.skipped++;
       continue;
     }
-    if ((await sendComment(db, claimed)) === 'SENT') res.sent++;
-    else res.failed++;
+    const r = await sendComment(db, claimed);
+    if (r === 'SENT') res.sent++;
+    else if (r === 'FAILED') res.failed++;
+    else res.skipped++;
   }
   return res;
 }

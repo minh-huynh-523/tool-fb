@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(curl --retry 40 --retry-delay 1 --retry-connrefused -s -o /dev/null -w \"login HTTP %{http_code}\\\\n\" http://localhost:3000/login)"
+    ]
+  }
+}

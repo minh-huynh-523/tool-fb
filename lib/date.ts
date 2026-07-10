@@ -1,0 +1,51 @@
+// Mốc đầu ngày theo giờ Việt Nam (UTC+7, không DST), trả về ISO (UTC) để so với cột timestamptz.
+export function startOfTodayVNISO(): string {
+  const now = new Date();
+  const vn = new Date(now.getTime() + 7 * 3600 * 1000); // dịch sang giờ VN
+  const y = vn.getUTCFullYear();
+  const m = vn.getUTCMonth();
+  const d = vn.getUTCDate();
+  const utcMs = Date.UTC(y, m, d, 0, 0, 0) - 7 * 3600 * 1000; // nửa đêm VN quy về UTC
+  return new Date(utcMs).toISOString();
+}
+
+// Mốc đầu ngày (00:00 giờ VN) của 1 ngày "YYYY-MM-DD" -> ISO (UTC).
+export function startOfDayVNISO(yyyyMmDd: string): string {
+  const [y, m, d] = yyyyMmDd.split('-').map(Number);
+  const utcMs = Date.UTC(y, m - 1, d, 0, 0, 0) - 7 * 3600 * 1000;
+  return new Date(utcMs).toISOString();
+}
+
+// Mốc cuối ngày (23:59:59.999 giờ VN) của 1 ngày "YYYY-MM-DD" -> ISO (UTC).
+export function endOfDayVNISO(yyyyMmDd: string): string {
+  const [y, m, d] = yyyyMmDd.split('-').map(Number);
+  const utcMs = Date.UTC(y, m - 1, d, 23, 59, 59, 999) - 7 * 3600 * 1000;
+  return new Date(utcMs).toISOString();
+}
+
+// "YYYY-MM-DDTHH:mm" (coi là giờ VN, UTC+7) -> ISO UTC. Dùng cho lên lịch comment.
+export function vnLocalToISO(local: string): string {
+  const [datePart, timePart] = local.split("T");
+  const [y, m, d] = datePart.split("-").map(Number);
+  const [hh, mm] = (timePart ?? "00:00").split(":").map(Number);
+  const utcMs = Date.UTC(y, m - 1, d, hh, mm, 0) - 7 * 3600 * 1000;
+  return new Date(utcMs).toISOString();
+}
+
+// ISO UTC -> "YYYY-MM-DDTHH:mm" theo giờ VN (UTC+7). Ngược với vnLocalToISO — dùng để
+// đổ giá trị run_after vào DateTimePicker khi sửa lịch.
+export function isoToVnLocal(iso: string): string {
+  const vn = new Date(new Date(iso).getTime() + 7 * 3600 * 1000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${vn.getUTCFullYear()}-${p(vn.getUTCMonth() + 1)}-${p(vn.getUTCDate())}T${p(vn.getUTCHours())}:${p(vn.getUTCMinutes())}`;
+}
+
+// Format hiển thị ngắn theo giờ VN.
+export function formatVN(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+  } catch {
+    return iso;
+  }
+}

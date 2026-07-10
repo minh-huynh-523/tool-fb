@@ -10,6 +10,11 @@ export async function middleware(request: NextRequest) {
   const isLogin = pathname === "/login";
 
   if (!session && !isLogin) {
+    // API route: trả 401 JSON — redirect sang /login làm fetch của client nhận HTML
+    // rồi nổ "Unexpected token '<' ... is not valid JSON" khi res.json().
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Phiên đăng nhập đã hết hạn — hãy tải lại trang." }, { status: 401 });
+    }
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.search = "";

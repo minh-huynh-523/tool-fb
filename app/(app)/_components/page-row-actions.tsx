@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/fetch-json";
 
 export function PageRowActions({ pageId }: { pageId: string }) {
   const router = useRouter();
@@ -13,8 +14,7 @@ export function PageRowActions({ pageId }: { pageId: string }) {
     setBusy("test");
     setNote(null);
     try {
-      const res = await fetch(`/api/pages/${encodeURIComponent(pageId)}/test-token`);
-      const data = await res.json();
+      const { data } = await fetchJson(`/api/pages/${encodeURIComponent(pageId)}/test-token`);
       if (data.ok) {
         toast.success(`Token OK — ${data.name}`);
         setNote({ type: "ok", text: `Token OK — ${data.name}` });
@@ -34,8 +34,7 @@ export function PageRowActions({ pageId }: { pageId: string }) {
     setBusy("sync");
     setNote(null);
     try {
-      const res = await fetch(`/api/pages/${encodeURIComponent(pageId)}/sync`, { method: "POST" });
-      const data = await res.json();
+      const { res, data } = await fetchJson(`/api/pages/${encodeURIComponent(pageId)}/sync`, { method: "POST" });
       if (res.ok) {
         const count = data.result?.count ?? 0;
         toast.success(`Đồng bộ: ${count} bài`);

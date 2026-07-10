@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, Trash2 } from "lucide-react";
+import { fetchJson } from "@/lib/fetch-json";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,8 +34,7 @@ export function DeleteCommentButton({
   async function doDelete() {
     setLoading(true);
     try {
-      const res = await fetch(`/api/posts/${postDbId}/comments/${comment.id}`, { method: "DELETE" });
-      const data = await res.json();
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments/${comment.id}`, { method: "DELETE" });
       if (!res.ok) {
         toast.error(data.error ?? "Không xoá được comment");
         return;

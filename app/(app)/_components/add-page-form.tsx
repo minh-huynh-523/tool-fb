@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/fetch-json";
 
 export function AddPageForm() {
   const router = useRouter();
@@ -17,12 +18,11 @@ export function AddPageForm() {
     setLoading(true);
     setMsg(null);
     try {
-      const res = await fetch("/api/pages", {
+      const { res, data } = await fetchJson("/api/pages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ page_id: pageId.trim(), name: name.trim(), access_token: token.trim() }),
       });
-      const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? "Lỗi không xác định");
         setMsg({ type: "err", text: data.error ?? "Lỗi không xác định" });

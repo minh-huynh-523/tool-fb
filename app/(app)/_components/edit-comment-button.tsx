@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Loader2, Pencil } from "lucide-react";
 import { isoToVnLocal } from "@/lib/date";
+import { fetchJson } from "@/lib/fetch-json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -51,12 +52,11 @@ export function EditCommentButton({
       // Chỉ gửi runAt khi user THẬT SỰ đổi giờ — giữ nguyên run_after gốc (kể cả giây buffer).
       const payload: Record<string, string> = { message, attachmentUrl };
       if (runAt !== isoToVnLocal(comment.run_after)) payload.runAt = runAt;
-      const res = await fetch(`/api/posts/${postDbId}/comments/${comment.id}`, {
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments/${comment.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? "Không sửa được comment");
         return;

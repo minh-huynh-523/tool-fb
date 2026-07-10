@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { fetchJson } from "@/lib/fetch-json";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,12 +16,11 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/login", {
+      const { res, data } = await fetchJson("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
       });
-      const data = await res.json();
       if (!res.ok) {
         setError(data.error ?? "Đăng nhập thất bại");
         setLoading(false);

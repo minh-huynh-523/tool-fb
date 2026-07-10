@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/fetch-json";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -32,12 +33,11 @@ export function AddCommentForm({
     }
     setLoading(true);
     try {
-      const res = await fetch(`/api/posts/${postDbId}/comments`, {
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, attachmentUrl, runAt }),
       });
-      const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? "Không thêm được comment");
         return;

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { FileText, ExternalLink, Loader2 } from "lucide-react";
+import { fetchJson } from "@/lib/fetch-json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -59,12 +60,11 @@ export function WordpressPostButton({
     }
     setLoading(true);
     try {
-      const res = await fetch(`/api/posts/${postDbId}/wordpress/scrape`, {
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress/scrape`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceUrl: url.trim() }),
       });
-      const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? "Cào thất bại");
         return;
@@ -92,12 +92,11 @@ export function WordpressPostButton({
     }
     setLoading(true);
     try {
-      const res = await fetch(`/api/posts/${postDbId}/wordpress`, {
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceUrl: url.trim(), title: title.trim() }),
       });
-      const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? "Đăng nháp thất bại");
         return;

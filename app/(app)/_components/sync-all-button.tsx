@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw } from "lucide-react";
+import { fetchJson } from "@/lib/fetch-json";
 import { Button } from "@/components/ui/button";
 
 interface SyncRow {
@@ -19,8 +20,7 @@ export function SyncAllButton() {
   async function syncAll() {
     setLoading(true);
     try {
-      const res = await fetch("/api/pages/sync-all", { method: "POST" });
-      const data = await res.json();
+      const { res, data } = await fetchJson("/api/pages/sync-all", { method: "POST" });
       if (!res.ok) {
         toast.error(data.error ?? "Đồng bộ thất bại");
         return;

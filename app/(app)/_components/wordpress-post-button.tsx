@@ -31,22 +31,50 @@ type ImageOverride =
 
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // Vercel cap body ~4.5MB
 
-// Nút copy permalink vào clipboard (icon Copy -> Check 1.5s).
-function CopyPermalinkButton({ url, label }: { url: string; label?: string }) {
+// Verify permalink trước khi dùng (copy/đăng comment): link phải sống (HTTP 200) và
+// nội dung khớp title bài — chặn link 404 (bài còn draft, slug sai, row cũ dạng ?p=).
+// Server tự chữa wp_permalink trong DB nếu WP trả link mới -> trả về link chuẩn để dùng.
+async function verifyPermalink(postDbId: string): Promise<{ ok: boolean; permalink: string | null }> {
+  try {
+    const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress/verify`, { method: "POST" });
+    if (!res.ok || !data.ok) {
+      toast.error(data.message ?? data.error ?? "Link chưa hợp lệ — kiểm tra bài trên WP");
+      return { ok: false, permalink: data.permalink ?? null };
+    }
+    return { ok: true, permalink: data.permalink };
+  } catch (e) {
+    toast.error((e as Error).message);
+    return { ok: false, permalink: null };
+  }
+}
+
+// Nút copy permalink vào clipboard — verify link sống + đúng nội dung trước khi copy.
+function CopyPermalinkButton({ postDbId, url, label }: { postDbId: string; url: string; label?: string }) {
+  const router = useRouter();
+  const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
   async function copy() {
+    setChecking(true);
     try {
-      await navigator.clipboard.writeText(url);
-      setCopied(true);
-      toast.success("Đã sao chép permalink");
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error("Không sao chép được — hãy copy thủ công");
+      const v = await verifyPermalink(postDbId);
+      if (!v.ok) return;
+      const link = v.permalink ?? url;
+      if (link !== url) router.refresh(); // DB vừa được chữa link -> refresh UI
+      try {
+        await navigator.clipboard.writeText(link);
+        setCopied(true);
+        toast.success("Link OK (đã kiểm tra) — đã sao chép");
+        setTimeout(() => setCopied(false), 1500);
+      } catch {
+        toast.error("Không sao chép được — hãy copy thủ công");
+      }
+    } finally {
+      setChecking(false);
     }
   }
   return (
-    <Button variant="outline" size="sm" onClick={copy} title={url}>
-      {copied ? <Check className="text-green-600" /> : <Copy />}
+    <Button variant="outline" size="sm" onClick={copy} disabled={checking} title={url}>
+      {checking ? <Loader2 className="animate-spin" /> : copied ? <Check className="text-green-600" /> : <Copy />}
       {label ?? "Copy link"}
     </Button>
   );
@@ -82,11 +110,15 @@ function ScheduleCommentButton({
     if (!firstRunAfter) return;
     setLoading(true);
     try {
+      // Verify link sống + đúng nội dung trước — không lên lịch comment chứa link 404.
+      const v = await verifyPermalink(postDbId);
+      if (!v.ok) return;
+      const link = v.permalink ?? permalink;
       const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: `Full story: ${permalink}`,
+          message: `Full story: ${link}`,
           runAtISO: firstRunAfter,
         }),
       });
@@ -158,7 +190,7 @@ export function WordpressPostButton({
         </Button>
         {existing.permalink && (
           <>
-            <CopyPermalinkButton url={existing.permalink} />
+            <CopyPermalinkButton postDbId={postDbId} url={existing.permalink} />
             <ScheduleCommentButton postDbId={postDbId} permalink={existing.permalink} commentsInfo={commentsInfo} />
           </>
         )}
@@ -315,7 +347,7 @@ export function WordpressPostButton({
                   <Label>Permalink</Label>
                   <div className="flex items-center gap-2">
                     <Input readOnly value={published.permalink} onFocus={(e) => e.currentTarget.select()} />
-                    <CopyPermalinkButton url={published.permalink} label="Copy" />
+                    <CopyPermalinkButton postDbId={postDbId} url={published.permalink} label="Copy" />
                   </div>
                 </div>
               )}
@@ -337,7 +369,8 @@ export function WordpressPostButton({
               </div>
               {published.status === "draft" && (
                 <p className="text-xs text-muted-foreground">
-                  Bài đang ở dạng nháp — permalink chỉ mở được sau khi publish bài trên WP.
+                  Bài đang ở dạng nháp — nút Copy/Đăng vào comment sẽ kiểm tra link thật và chỉ chạy sau khi bài đã
+                  publish trên WP.
                 </p>
               )}
             </div>

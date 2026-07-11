@@ -57,22 +57,30 @@ export function slugifyTitle(title: string): string {
     .slice(0, 200);
 }
 
-// wp.getPost -> { link, slug }. Bài publish: link là pretty permalink; draft: link dạng ?p=ID
+// wp.getPost -> { link, slug, status, title }. Bài publish: link là pretty permalink; draft: link dạng ?p=ID
 // nhưng slug (post_name) có sẵn do mình set lúc tạo -> caller tự dựng pretty link.
-// Không throw: lỗi trả null để caller fallback.
-export async function wpGetPostInfo(postId: string): Promise<{ link: string | null; slug: string | null }> {
+// Không throw: lỗi trả null hết để caller fallback.
+export async function wpGetPostInfo(postId: string): Promise<{
+  link: string | null;
+  slug: string | null;
+  status: string | null;
+  title: string | null;
+}> {
   try {
     const { url, user, password } = cfg();
-    const res = await call<{ link?: string; post_name?: string }>(url, 'wp.getPost', [
-      0,
-      user,
-      password,
-      parseInt(postId, 10),
-      ['link', 'post_name'],
-    ]);
-    return { link: res.link ?? null, slug: res.post_name || null };
+    const res = await call<{ link?: string; post_name?: string; post_status?: string; post_title?: string }>(
+      url,
+      'wp.getPost',
+      [0, user, password, parseInt(postId, 10), ['link', 'post_name', 'post_status', 'post_title']],
+    );
+    return {
+      link: res.link ?? null,
+      slug: res.post_name || null,
+      status: res.post_status ?? null,
+      title: res.post_title ?? null,
+    };
   } catch {
-    return { link: null, slug: null };
+    return { link: null, slug: null, status: null, title: null };
   }
 }
 

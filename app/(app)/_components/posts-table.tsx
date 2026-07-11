@@ -142,7 +142,7 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
                         commentsInfo={{
                           // p.comments đã sort run_after ASC -> phần tử đầu là first comment
                           firstRunAfter: p.comments[0]?.run_after ?? null,
-                          attachmentUrls: p.comments.map((c) => c.attachment_url),
+                          texts: p.comments.map((c) => `${c.message ?? ""} ${c.attachment_url ?? ""}`),
                         }}
                       />
                       <Button size="sm" onClick={() => setOpenId(isOpen ? null : p.id)}>

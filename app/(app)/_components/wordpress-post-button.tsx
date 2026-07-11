@@ -61,13 +61,13 @@ function ScheduleCommentButton({
 }: {
   postDbId: string;
   permalink: string;
-  commentsInfo?: { firstRunAfter: string | null; attachmentUrls: (string | null)[] };
+  commentsInfo?: { firstRunAfter: string | null; texts: string[] };
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
 
-  const alreadyScheduled = done || (commentsInfo?.attachmentUrls ?? []).includes(permalink);
+  const alreadyScheduled = done || (commentsInfo?.texts ?? []).some((t) => t.includes(permalink));
   const firstRunAfter = commentsInfo?.firstRunAfter ?? null;
 
   if (alreadyScheduled) {
@@ -87,7 +87,6 @@ function ScheduleCommentButton({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: `Full story: ${permalink}`,
-          attachmentUrl: permalink,
           runAtISO: firstRunAfter,
         }),
       });
@@ -130,8 +129,8 @@ export function WordpressPostButton({
 }: {
   postDbId: string;
   existing?: { editUrl: string | null; status: string | null; permalink: string | null } | null;
-  // Thông tin comment đã lên lịch của post: giờ first comment + các attachment_url (check trùng permalink).
-  commentsInfo?: { firstRunAfter: string | null; attachmentUrls: (string | null)[] };
+  // Thông tin comment đã lên lịch của post: giờ first comment + nội dung (check trùng permalink).
+  commentsInfo?: { firstRunAfter: string | null; texts: string[] };
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);

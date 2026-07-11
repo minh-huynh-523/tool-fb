@@ -60,7 +60,7 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
                   firstRunAfter: comments.length
                     ? comments.reduce((min, c) => (c.run_after < min ? c.run_after : min), comments[0].run_after)
                     : null,
-                  attachmentUrls: comments.map((c) => c.attachment_url),
+                  texts: comments.map((c) => `${c.message ?? ""} ${c.attachment_url ?? ""}`),
                 }}
               />
               {post.permalink && (

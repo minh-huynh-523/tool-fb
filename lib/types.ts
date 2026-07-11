@@ -41,6 +41,7 @@ export interface ScrapedArticleRow {
   wp_post_id: string | null;
   wp_status: string | null;
   wp_edit_url: string | null;
+  wp_permalink: string | null; // link công khai (?p=ID khi còn draft)
   created_at: string;
   updated_at: string;
 }

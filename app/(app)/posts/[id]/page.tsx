@@ -50,7 +50,18 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
             <div className="flex shrink-0 items-center gap-2">
               <WordpressPostButton
                 postDbId={post.id}
-                existing={scraped ? { editUrl: scraped.wp_edit_url, status: scraped.wp_status } : null}
+                existing={
+                  scraped
+                    ? { editUrl: scraped.wp_edit_url, status: scraped.wp_status, permalink: scraped.wp_permalink }
+                    : null
+                }
+                commentsInfo={{
+                  // comments sort theo created_at DESC -> lấy min run_after làm first comment
+                  firstRunAfter: comments.length
+                    ? comments.reduce((min, c) => (c.run_after < min ? c.run_after : min), comments[0].run_after)
+                    : null,
+                  attachmentUrls: comments.map((c) => c.attachment_url),
+                }}
               />
               {post.permalink && (
                 <Button variant="outline" size="sm" asChild>

@@ -24,7 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
 
   const { postDbId } = await params;
 
-  let body: { message?: string; attachmentUrl?: string; runAt?: string };
+  let body: { message?: string; attachmentUrl?: string; runAt?: string; runAtISO?: string };
   try {
     body = await req.json();
   } catch {
@@ -34,6 +34,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
   const message = (body.message ?? "").trim();
   const attachmentUrl = (body.attachmentUrl ?? "").trim();
   const runAt = (body.runAt ?? "").trim(); // "YYYY-MM-DDTHH:mm" giờ VN — user tự hẹn giờ
+  const runAtISO = (body.runAtISO ?? "").trim(); // ISO timestamptz — copy chính xác run_after của comment khác
   if (!message && !attachmentUrl) {
     return NextResponse.json({ error: "Cần nhập nội dung hoặc link đính kèm" }, { status: 400 });
   }
@@ -54,7 +55,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
 
   // Bài lên lịch Business Suite: biết bài tồn tại nhưng KHÔNG biết giờ đăng (Meta không expose)
   // -> bắt buộc user tự chọn giờ, nếu không comment sẽ bắn ngay vào bài chưa lên sóng và fail.
-  if (!p.is_published && !p.scheduled_publish_time && !runAt) {
+  if (!p.is_published && !p.scheduled_publish_time && !runAt && !runAtISO) {
     return NextResponse.json(
       { error: 'Bài này đang lên lịch nhưng chưa rõ giờ đăng — hãy chọn "Đăng comment lúc" (sau giờ bài lên sóng).' },
       { status: 400 },
@@ -62,11 +63,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
   }
 
   // run_after quyết định thời điểm worker gửi comment:
+  // 0) runAtISO -> dùng nguyên ISO (copy chính xác run_after của comment khác, không mất giây).
   // 1) User tự hẹn giờ (runAt) -> đúng giờ đó (giờ VN).
   // 2) Bài lên lịch (chưa publish) -> giờ lên lịch + delay (comment vào bài chưa publish sẽ fail).
   // 3) Bài đã đăng -> publish_at (fb_created_at) + delay.
   let runAfter: string;
-  if (runAt) {
+  if (runAtISO) {
+    const t = new Date(runAtISO).getTime();
+    if (Number.isNaN(t)) {
+      return NextResponse.json({ error: "Giờ hẹn (ISO) không hợp lệ" }, { status: 400 });
+    }
+    runAfter = new Date(t).toISOString();
+  } else if (runAt) {
     const iso = vnLocalToISO(runAt);
     if (Number.isNaN(new Date(iso).getTime())) {
       return NextResponse.json({ error: "Giờ hẹn không hợp lệ" }, { status: 400 });

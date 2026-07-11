@@ -43,6 +43,18 @@ export async function wpUploadFile(input: { name: string; type: string; bits: Bu
   return { id: id != null ? String(id) : '', url: res.url ?? '' };
 }
 
+// wp.getPost -> lấy permalink (field `link`). Draft trả dạng ?p=ID — redirect sang pretty permalink sau khi publish.
+// Không throw: lỗi trả null để caller fallback tự dựng ?p=.
+export async function wpGetPostLink(postId: string): Promise<string | null> {
+  try {
+    const { url, user, password } = cfg();
+    const res = await call<{ link?: string }>(url, 'wp.getPost', [0, user, password, parseInt(postId, 10), ['link']]);
+    return res.link ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // wp.newPost -> tạo bài draft. Trả về post id (string).
 export async function wpNewPostDraft(input: {
   title: string;

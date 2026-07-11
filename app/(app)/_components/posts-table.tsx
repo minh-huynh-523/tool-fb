@@ -19,7 +19,12 @@ type Row = PostRow & {
   commentStatus: CommentStatus | null;
   commentCounts: Partial<Record<CommentStatus, number>>;
   comments: CommentHistoryRow[];
-  wp: { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null } | null;
+  wp: {
+    wp_post_id: string | null;
+    wp_edit_url: string | null;
+    wp_status: string | null;
+    wp_permalink: string | null;
+  } | null;
 };
 
 function TypeBadge({ published }: { published: boolean }) {
@@ -129,7 +134,16 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
                       </Button>
                       <WordpressPostButton
                         postDbId={p.id}
-                        existing={p.wp ? { editUrl: p.wp.wp_edit_url, status: p.wp.wp_status } : null}
+                        existing={
+                          p.wp
+                            ? { editUrl: p.wp.wp_edit_url, status: p.wp.wp_status, permalink: p.wp.wp_permalink }
+                            : null
+                        }
+                        commentsInfo={{
+                          // p.comments đã sort run_after ASC -> phần tử đầu là first comment
+                          firstRunAfter: p.comments[0]?.run_after ?? null,
+                          attachmentUrls: p.comments.map((c) => c.attachment_url),
+                        }}
                       />
                       <Button size="sm" onClick={() => setOpenId(isOpen ? null : p.id)}>
                         {isOpen ? <X /> : <MessageSquarePlus />}

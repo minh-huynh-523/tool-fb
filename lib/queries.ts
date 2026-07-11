@@ -24,7 +24,14 @@ export interface PostWithComment extends PostRow {
   commentStatus: CommentStatus | null;
   commentCounts: Partial<Record<CommentStatus, number>>;
   comments: CommentHistoryRow[]; // lịch sử comment của mình cho bài này (mới lên lịch → đã đăng/lỗi)
-  wp: { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null } | null;
+  wp: { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null; wp_permalink: string | null } | null;
+}
+
+// Row cũ chưa có wp_permalink (trước migration 0006) -> tự dựng link ?p=ID từ wp_post_id (vẫn dùng được).
+function resolvePermalink(row: { wp_permalink: string | null; wp_post_id: string | null }): string | null {
+  if (row.wp_permalink) return row.wp_permalink;
+  const base = process.env.WP_BASE_URL ?? '';
+  return base && row.wp_post_id ? `${base}/?p=${row.wp_post_id}` : null;
 }
 
 export interface ListPostsResult {
@@ -87,7 +94,7 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
       .select('id, post_id, message, attachment_url, run_after, status, sent_at, error, created_at')
       .in('post_id', ids)
       .order('run_after', { ascending: true }),
-    db.from('scraped_article').select('post_id, wp_post_id, wp_edit_url, wp_status').in('post_id', ids),
+    db.from('scraped_article').select('post_id, wp_post_id, wp_edit_url, wp_status, wp_permalink').in('post_id', ids),
   ]);
 
   const byPost = new Map<string, Partial<Record<CommentStatus, number>>>();
@@ -107,8 +114,14 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
     wp_post_id: string | null;
     wp_edit_url: string | null;
     wp_status: string | null;
+    wp_permalink: string | null;
   }[]) {
-    wpByPost.set(s.post_id, { wp_post_id: s.wp_post_id, wp_edit_url: s.wp_edit_url, wp_status: s.wp_status });
+    wpByPost.set(s.post_id, {
+      wp_post_id: s.wp_post_id,
+      wp_edit_url: s.wp_edit_url,
+      wp_status: s.wp_status,
+      wp_permalink: resolvePermalink(s),
+    });
   }
 
   const rows: PostWithComment[] = list.map((p) => {
@@ -128,21 +141,36 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
 export async function getPostWithComments(postDbId: string): Promise<{
   post: PostRow;
   comments: ScheduledCommentRow[];
-  scraped: { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null } | null;
+  scraped: {
+    wp_post_id: string | null;
+    wp_edit_url: string | null;
+    wp_status: string | null;
+    wp_permalink: string | null;
+  } | null;
 } | null> {
   const db = createSupabaseAdmin();
   // 3 query độc lập (cùng key postDbId) — chạy song song, tiết kiệm 2 round-trip.
   const [{ data: post, error }, { data: comments }, { data: scraped }] = await Promise.all([
     db.from('post').select(POST_COLUMNS).eq('id', postDbId).maybeSingle(),
     db.from('scheduled_comment').select('*').eq('post_id', postDbId).order('created_at', { ascending: false }),
-    db.from('scraped_article').select('wp_post_id, wp_edit_url, wp_status').eq('post_id', postDbId).maybeSingle(),
+    db
+      .from('scraped_article')
+      .select('wp_post_id, wp_edit_url, wp_status, wp_permalink')
+      .eq('post_id', postDbId)
+      .maybeSingle(),
   ]);
   if (error) throw error;
   if (!post) return null;
+  const s = scraped as {
+    wp_post_id: string | null;
+    wp_edit_url: string | null;
+    wp_status: string | null;
+    wp_permalink: string | null;
+  } | null;
   return {
     post: post as PostRow,
     comments: (comments ?? []) as ScheduledCommentRow[],
-    scraped: (scraped as { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null }) ?? null,
+    scraped: s ? { ...s, wp_permalink: resolvePermalink(s) } : null,
   };
 }
 

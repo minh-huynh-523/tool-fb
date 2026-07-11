@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { scrapeArticle } from "@/lib/scrape";
-import { wpGetPostLink, wpNewPostDraft, wpUploadFile } from "@/lib/wordpress/client";
+import { wpGetPostInfo, wpNewPostDraft, wpUploadFile } from "@/lib/wordpress/client";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -129,8 +129,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
     });
     const base = process.env.WP_BASE_URL ?? "";
     const editUrl = base ? `${base}/wp-admin/post.php?post=${wpPostId}&action=edit` : null;
-    // Permalink công khai: hỏi WP (wp.getPost -> `link`, draft trả ?p=ID); lỗi thì tự dựng ?p=.
-    const permalink = (await wpGetPostLink(wpPostId)) ?? (base ? `${base}/?p=${wpPostId}` : null);
+    // Permalink pretty (dạng /slug/): bài publish lấy `link` từ WP; draft thì `link` là ?p=ID
+    // -> dựng từ slug (đã set lúc tạo, giữ nguyên khi publish). Fallback cuối: ?p=.
+    const { link, slug } = await wpGetPostInfo(wpPostId);
+    const prettyFromSlug = slug && base ? `${base}/${slug}/` : null;
+    const permalink =
+      (link && !link.includes("?p=") ? link : null) ?? prettyFromSlug ?? link ?? (base ? `${base}/?p=${wpPostId}` : null);
 
     const { error: upErr } = await db.from("scraped_article").upsert(
       {

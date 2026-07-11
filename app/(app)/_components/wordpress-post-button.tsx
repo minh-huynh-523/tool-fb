@@ -338,7 +338,7 @@ export function WordpressPostButton({
               </div>
               {published.status === "draft" && (
                 <p className="text-xs text-muted-foreground">
-                  Link dạng ?p= chỉ xem được sau khi publish bài trên WP (hoặc khi đã đăng nhập wp-admin).
+                  Bài đang ở dạng nháp — permalink chỉ mở được sau khi publish bài trên WP.
                 </p>
               )}
             </div>

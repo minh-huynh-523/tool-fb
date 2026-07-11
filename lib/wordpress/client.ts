@@ -43,15 +43,36 @@ export async function wpUploadFile(input: { name: string; type: string; bits: Bu
   return { id: id != null ? String(id) : '', url: res.url ?? '' };
 }
 
-// wp.getPost -> lấy permalink (field `link`). Draft trả dạng ?p=ID — redirect sang pretty permalink sau khi publish.
-// Không throw: lỗi trả null để caller fallback tự dựng ?p=.
-export async function wpGetPostLink(postId: string): Promise<string | null> {
+// Slug từ title (xấp xỉ sanitize_title của WP): bỏ dấu, bỏ nháy, ký tự khác chữ/số -> '-'.
+export function slugifyTitle(title: string): string {
+  return title
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .replace(/['’"“”]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 200);
+}
+
+// wp.getPost -> { link, slug }. Bài publish: link là pretty permalink; draft: link dạng ?p=ID
+// nhưng slug (post_name) có sẵn do mình set lúc tạo -> caller tự dựng pretty link.
+// Không throw: lỗi trả null để caller fallback.
+export async function wpGetPostInfo(postId: string): Promise<{ link: string | null; slug: string | null }> {
   try {
     const { url, user, password } = cfg();
-    const res = await call<{ link?: string }>(url, 'wp.getPost', [0, user, password, parseInt(postId, 10), ['link']]);
-    return res.link ?? null;
+    const res = await call<{ link?: string; post_name?: string }>(url, 'wp.getPost', [
+      0,
+      user,
+      password,
+      parseInt(postId, 10),
+      ['link', 'post_name'],
+    ]);
+    return { link: res.link ?? null, slug: res.post_name || null };
   } catch {
-    return null;
+    return { link: null, slug: null };
   }
 }
 
@@ -73,6 +94,9 @@ export async function wpNewPostDraft(input: {
   };
   if (input.excerpt) content.post_excerpt = input.excerpt;
   if (input.thumbnailId) content.post_thumbnail = input.thumbnailId;
+  // Set slug ngay lúc tạo (WP không sinh post_name cho draft) -> pretty permalink biết trước được.
+  const slug = slugifyTitle(input.title);
+  if (slug) content.post_name = slug;
   // terms_names: gán category theo TÊN, tự tạo term nếu chưa tồn tại (khác `terms` cần ID).
   if (input.categories?.length) content.terms_names = { category: input.categories };
   const id = await call<string | number>(url, 'wp.newPost', [0, user, password, content]);

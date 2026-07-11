@@ -68,7 +68,14 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
             const isOpen = openId === p.id;
             return (
               <Fragment key={p.id}>
-                <TableRow className="align-top">
+                {/* Click vào row là mở/đóng phần comment luôn — trừ khi click vào link/nút/form bên trong. */}
+                <TableRow
+                  className="cursor-pointer align-top"
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest("a,button,input,textarea,select,[role='dialog']")) return;
+                    setOpenId(isOpen ? null : p.id);
+                  }}
+                >
                   <TableCell>
                     <div className="flex gap-3">
                       {p.media_url ? (

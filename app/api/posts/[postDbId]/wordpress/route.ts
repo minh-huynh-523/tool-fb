@@ -12,9 +12,9 @@ const UA =
 
 type ImageMode = "auto" | "url" | "none" | "upload";
 
-// POST /api/posts/[postDbId]/wordpress — multipart/form-data { sourceUrl, title, imageMode, imageUrl?, imageFile? }
-// (vẫn nhận JSON { sourceUrl, title } cũ = imageMode "auto").
-// Cào bài gốc -> tạo nháp WordPress -> lưu scraped_article (1-1 với post).
+// POST /api/posts/[postDbId]/wordpress — multipart/form-data { sourceUrl, title, imageMode, imageUrl?, imageFile?, wpStatus? }
+// (vẫn nhận JSON { sourceUrl, title } cũ = imageMode "auto", wpStatus "draft").
+// Cào bài gốc -> tạo bài WordPress (draft hoặc publish luôn) -> lưu scraped_article (1-1 với post).
 export async function POST(req: NextRequest, { params }: { params: Promise<{ postDbId: string }> }) {
   const auth = await requireUser();
   if (!auth.ok) return auth.res;
@@ -26,6 +26,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
   let imageMode: ImageMode = "auto";
   let imageUrlOverride = "";
   let imageFile: File | null = null;
+  let wpStatus: "draft" | "publish" = "draft";
   if (req.headers.get("content-type")?.includes("multipart/form-data")) {
     let fd: FormData;
     try {
@@ -42,6 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
     imageUrlOverride = String(fd.get("imageUrl") ?? "").trim();
     const f = fd.get("imageFile");
     if (f instanceof File) imageFile = f;
+    if (String(fd.get("wpStatus") ?? "") === "publish") wpStatus = "publish";
   } else {
     let body: { sourceUrl?: string; title?: string };
     try {
@@ -123,6 +125,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
       excerpt: article.description,
       thumbnailId,
       categories: [category],
+      status: wpStatus,
     });
     const base = process.env.WP_BASE_URL ?? "";
     const editUrl = base ? `${base}/wp-admin/post.php?post=${wpPostId}&action=edit` : null;
@@ -135,7 +138,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
         source_url: sourceUrl,
         title,
         wp_post_id: wpPostId,
-        wp_status: "draft",
+        wp_status: wpStatus,
         wp_edit_url: editUrl,
         wp_permalink: permalink,
         updated_at: new Date().toISOString(),

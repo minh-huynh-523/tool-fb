@@ -85,7 +85,11 @@ function ScheduleCommentButton({
       const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attachmentUrl: permalink, runAtISO: firstRunAfter }),
+        body: JSON.stringify({
+          message: `Full story: ${permalink}`,
+          attachmentUrl: permalink,
+          runAtISO: firstRunAfter,
+        }),
       });
       if (!res.ok) {
         toast.error(data.error ?? "Lên lịch comment thất bại");
@@ -137,16 +141,20 @@ export function WordpressPostButton({
   const [loading, setLoading] = useState(false);
   const [image, setImage] = useState<ImageOverride>({ kind: "auto" });
   const [imageUrlInput, setImageUrlInput] = useState("");
-  const [published, setPublished] = useState<{ editUrl: string | null; permalink: string | null } | null>(null);
+  const [published, setPublished] = useState<{
+    editUrl: string | null;
+    permalink: string | null;
+    status: "draft" | "publish";
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Đã tạo nháp -> mở nháp WP + copy permalink + option đăng permalink vào comment.
+  // Đã tạo bài WP -> mở bài/nháp + copy permalink + option đăng permalink vào comment.
   if (existing?.editUrl) {
     return (
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" asChild>
           <a href={existing.editUrl} target="_blank" rel="noopener noreferrer">
-            <ExternalLink /> Mở nháp WP
+            <ExternalLink /> {existing.status === "publish" ? "Mở bài WP" : "Mở nháp WP"}
           </a>
         </Button>
         {existing.permalink && (
@@ -244,8 +252,8 @@ export function WordpressPostButton({
     }
   }
 
-  // BƯỚC 2: xác nhận -> đăng nháp với title + ảnh đại diện đã duyệt (multipart để gửi được file).
-  async function doPublish() {
+  // BƯỚC 2: xác nhận -> đăng (draft hoặc publish luôn) với title + ảnh đại diện đã duyệt (multipart để gửi được file).
+  async function doPublish(status: "draft" | "publish") {
     if (!title.trim()) {
       toast.error("Tiêu đề không được trống");
       return;
@@ -258,14 +266,15 @@ export function WordpressPostButton({
       fd.set("imageMode", image.kind === "file" ? "upload" : image.kind);
       if (image.kind === "url") fd.set("imageUrl", image.url);
       if (image.kind === "file") fd.set("imageFile", image.file);
+      fd.set("wpStatus", status);
       // KHÔNG set Content-Type — browser tự set boundary multipart.
       const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress`, { method: "POST", body: fd });
       if (!res.ok) {
-        toast.error(data.error ?? "Đăng nháp thất bại");
+        toast.error(data.error ?? (status === "publish" ? "Đăng bài thất bại" : "Đăng nháp thất bại"));
         return;
       }
-      toast.success("Đã tạo bản nháp trên WordPress");
-      setPublished({ editUrl: data.editUrl ?? null, permalink: data.permalink ?? null });
+      toast.success(status === "publish" ? "Đã đăng bài trên WordPress" : "Đã tạo bản nháp trên WordPress");
+      setPublished({ editUrl: data.editUrl ?? null, permalink: data.permalink ?? null, status });
       router.refresh();
     } catch (e) {
       toast.error((e as Error).message);
@@ -289,17 +298,19 @@ export function WordpressPostButton({
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Tạo bài nháp WordPress</DialogTitle>
+          <DialogTitle>Tạo bài WordPress</DialogTitle>
           <DialogDescription>
-            B1: cào bài gốc → B2: xác nhận tiêu đề + ảnh → đăng nháp (draft) trên life.kinhmatquangnhan.vn.
+            B1: cào bài gốc → B2: xác nhận tiêu đề + ảnh → đăng nháp hoặc đăng luôn trên life.kinhmatquangnhan.vn.
           </DialogDescription>
         </DialogHeader>
 
         {published ? (
           <>
-            {/* Đăng nháp xong: permalink + copy + mở nháp + option đăng vào comment */}
+            {/* Đăng xong: permalink + copy + mở bài/nháp + option đăng vào comment */}
             <div className="space-y-3">
-              <p className="text-sm">Đã tạo bản nháp trên WordPress.</p>
+              <p className="text-sm">
+                {published.status === "publish" ? "Đã đăng bài trên WordPress." : "Đã tạo bản nháp trên WordPress."}
+              </p>
               {published.permalink && (
                 <div className="space-y-1.5">
                   <Label>Permalink</Label>
@@ -313,7 +324,7 @@ export function WordpressPostButton({
                 {published.editUrl && (
                   <Button variant="outline" size="sm" asChild>
                     <a href={published.editUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink /> Mở nháp WP
+                      <ExternalLink /> {published.status === "publish" ? "Mở bài WP" : "Mở nháp WP"}
                     </a>
                   </Button>
                 )}
@@ -325,9 +336,11 @@ export function WordpressPostButton({
                   />
                 )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                Link dạng ?p= chỉ xem được sau khi publish bài trên WP (hoặc khi đã đăng nhập wp-admin).
-              </p>
+              {published.status === "draft" && (
+                <p className="text-xs text-muted-foreground">
+                  Link dạng ?p= chỉ xem được sau khi publish bài trên WP (hoặc khi đã đăng nhập wp-admin).
+                </p>
+              )}
             </div>
             <DialogFooter>
               <Button onClick={() => setOpen(false)}>Đóng</Button>
@@ -449,19 +462,30 @@ export function WordpressPostButton({
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Đăng nháp (draft) vào category <span className="font-medium text-foreground">Story</span>.
+              Đăng vào category <span className="font-medium text-foreground">Story</span> — chọn{" "}
+              <span className="font-medium text-foreground">Đăng nháp</span> (draft) hoặc{" "}
+              <span className="font-medium text-foreground">Đăng luôn</span> (publish công khai ngay).
             </p>
             <DialogFooter className="gap-2 sm:gap-2">
               <Button variant="outline" onClick={() => setPreview(null)} disabled={loading}>
                 Cào lại
               </Button>
-              <Button onClick={doPublish} disabled={loading || !title.trim()}>
+              <Button variant="secondary" onClick={() => doPublish("draft")} disabled={loading || !title.trim()}>
                 {loading ? (
                   <>
                     <Loader2 className="animate-spin" /> Đang đăng…
                   </>
                 ) : (
                   "Đăng nháp"
+                )}
+              </Button>
+              <Button onClick={() => doPublish("publish")} disabled={loading || !title.trim()}>
+                {loading ? (
+                  <>
+                    <Loader2 className="animate-spin" /> Đang đăng…
+                  </>
+                ) : (
+                  "Đăng luôn"
                 )}
               </Button>
             </DialogFooter>

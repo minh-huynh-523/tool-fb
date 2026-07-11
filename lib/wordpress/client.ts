@@ -55,18 +55,19 @@ export async function wpGetPostLink(postId: string): Promise<string | null> {
   }
 }
 
-// wp.newPost -> tạo bài draft. Trả về post id (string).
+// wp.newPost -> tạo bài (mặc định draft, truyền status: 'publish' để đăng luôn). Trả về post id (string).
 export async function wpNewPostDraft(input: {
   title: string;
   contentHtml: string;
   excerpt?: string;
   thumbnailId?: string;
   categories?: string[];
+  status?: 'draft' | 'publish';
 }): Promise<string> {
   const { url, user, password } = cfg();
   const content: Record<string, unknown> = {
     post_type: 'post',
-    post_status: 'draft',
+    post_status: input.status ?? 'draft',
     post_title: input.title,
     post_content: input.contentHtml,
   };

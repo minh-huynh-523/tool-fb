@@ -19,6 +19,14 @@ const BLOCKED_MARKERS = [
   "isn't available right now",
 ];
 
+/**
+ * Lỗi "chắc chắn không cào được" (geo-block / audience / bot-detect) — khác lỗi tạm thời
+ * (mạng chập, timeout). Worker dựa vào đây để TẮT page ngay thay vì thử lại mỗi 6h.
+ */
+export class BlockedError extends Error {
+  readonly blocked = true;
+}
+
 export interface ScrapedPage {
   handle: string;
   pageName: string | null;
@@ -56,7 +64,7 @@ async function collectFeed(context: BrowserContext, handle: string): Promise<Scr
   const head = (await page.locator('body').innerText().catch(() => '')).slice(0, 3000).toLowerCase();
   if (BLOCKED_MARKERS.some((m) => head.includes(m))) {
     await page.close();
-    throw new Error(`Bị chặn khi mở "${handle}" (bot-detect/geo/audience) — thử VPN nước khác hoặc kiểm tra cookie`);
+    throw new BlockedError(`Bị chặn khi mở "${handle}" (bot-detect/geo/audience) — thử VPN nước khác hoặc kiểm tra cookie`);
   }
 
   // Scroll để nạp thêm post + comment preview (mỗi vòng nghỉ cho GraphQL kịp trả).
@@ -72,8 +80,32 @@ async function collectFeed(context: BrowserContext, handle: string): Promise<Scr
     handle,
     pageName,
     fbPageId: pageId ?? (isNumeric(handle) ? handle : null),
-    posts: posts.slice(0, scraperConfig.maxPosts),
+    posts: recentFirst(posts, handle),
   };
+}
+
+/**
+ * Bỏ bài quá cũ, sort mới→cũ rồi mới cắt maxPosts.
+ * parseFeed trả theo thứ tự gặp trong fragment (không đảm bảo mới nhất trước) — nếu cắt trước khi
+ * sort thì maxPosts slot có thể bị bài cũ chiếm hết.
+ * Bài không rõ giờ (createdAt=null) bị loại vì không xác minh được tuổi; log riêng lý do để nếu FB
+ * đổi schema (creation_time biến mất) thì lộ ra ngay trên console chứ không âm thầm mất sạch bài.
+ */
+function recentFirst(posts: ParsedPost[], handle: string): ParsedPost[] {
+  const { maxAgeHours, maxPosts } = scraperConfig;
+  let kept = posts;
+
+  if (maxAgeHours > 0) {
+    const cutoff = Date.now() / 1000 - maxAgeHours * 3600;
+    const noTime = posts.filter((p) => p.createdAt === null).length;
+    kept = posts.filter((p) => p.createdAt !== null && p.createdAt >= cutoff);
+    const tooOld = posts.length - kept.length - noTime;
+    if (tooOld || noTime) {
+      console.log(`  ${handle}: bỏ ${tooOld} bài quá ${maxAgeHours}h, ${noTime} bài không rõ giờ`);
+    }
+  }
+
+  return [...kept].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, maxPosts);
 }
 
 /** Cào 1 page (tự mở & đóng browser). Dùng cho chạy lẻ. */
@@ -89,7 +121,7 @@ export async function scrapeCompetitorPage(handle: string): Promise<ScrapedPage>
 /** Cào nhiều page trong CÙNG 1 browser (tiết kiệm, nghỉ delayMs giữa các page). */
 export async function scrapeMany(
   handles: string[],
-  onEach: (r: ScrapedPage | { handle: string; error: string }) => Promise<void>,
+  onEach: (r: ScrapedPage | { handle: string; error: string; blocked: boolean }) => Promise<void>,
 ): Promise<void> {
   const { browser, context } = await launchStealth();
   try {
@@ -99,7 +131,7 @@ export async function scrapeMany(
         const r = await collectFeed(context, handle);
         await onEach(r);
       } catch (e) {
-        await onEach({ handle, error: (e as Error).message });
+        await onEach({ handle, error: (e as Error).message, blocked: e instanceof BlockedError });
       }
       if (i < handles.length - 1) await new Promise((r) => setTimeout(r, scraperConfig.delayMs));
     }

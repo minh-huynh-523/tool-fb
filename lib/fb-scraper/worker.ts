@@ -18,6 +18,7 @@ async function persist(db: SupabaseClient, pageRow: CompetitorPageRow, r: Scrape
       fb_page_id: r.fbPageId ?? pageRow.fb_page_id,
       last_scraped_at: new Date().toISOString(),
       last_error: null,
+      fail_count: 0, // cào lại được ⇒ xoá lịch sử lỗi, để lần hỏng sau đếm lại từ đầu
     })
     .eq('id', pageRow.id);
 
@@ -59,8 +60,30 @@ async function persist(db: SupabaseClient, pageRow: CompetitorPageRow, r: Scrape
   return commentCount;
 }
 
-async function markError(db: SupabaseClient, pageId: string, msg: string) {
-  await db.from('competitor_page').update({ last_error: msg, last_scraped_at: new Date().toISOString() }).eq('id', pageId);
+// Đủ ngần này lượt lỗi TẠM THỜI liên tiếp thì cũng tắt (lỗi chặn thì tắt ngay, không đợi).
+const MAX_FAILS = 3;
+
+/**
+ * Ghi lỗi + tự tắt page hỏng để lượt sau không phí timeout vào nó nữa.
+ * Lỗi bị chặn (geo/audience/bot-detect) là xác định → tắt ngay. Lỗi tạm thời (timeout, mạng
+ * chập) thì đếm, đủ MAX_FAILS lượt LIÊN TIẾP mới tắt — một lần rớt mạng không nên giết page.
+ * Bật lại bằng nút "Bật" trên UI (sau khi mở VPN / đổi cookie).
+ */
+async function markError(db: SupabaseClient, pageRow: CompetitorPageRow, msg: string, blocked: boolean) {
+  const fails = (pageRow.fail_count ?? 0) + 1;
+  const off = blocked || fails >= MAX_FAILS;
+  await db
+    .from('competitor_page')
+    .update({
+      last_error: msg,
+      last_scraped_at: new Date().toISOString(),
+      fail_count: fails,
+      ...(off ? { active: false } : {}),
+    })
+    .eq('id', pageRow.id);
+  if (off) {
+    console.warn(`  ↳ tắt theo dõi "${pageRow.handle}" (${blocked ? 'bị chặn' : `${fails} lượt lỗi liên tiếp`}) — bật lại trên UI`);
+  }
 }
 
 /** Cào danh sách pageRow (cùng 1 browser), ghi DB. 1 page lỗi không chặn cả batch. */
@@ -74,7 +97,7 @@ export async function scrapePages(db: SupabaseClient, pages: CompetitorPageRow[]
       if (!pageRow) return;
       if ('error' in res) {
         console.error(`✗ ${res.handle}: ${res.error}`);
-        await markError(db, pageRow.id, res.error);
+        await markError(db, pageRow, res.error, res.blocked);
         return;
       }
       const n = await persist(db, pageRow, res);

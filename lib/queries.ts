@@ -8,6 +8,7 @@ import type {
   CompetitorCommentRow,
   CompetitorPageRow,
   CompetitorPostRow,
+  PromptTemplateRow,
   FacebookPageRow,
   PostRow,
   ScheduledCommentRow,
@@ -226,6 +227,14 @@ export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> 
   });
 }
 
+// Liệt kê cột tường minh để BỎ `prompt_raw` (nguyên văn Gemini, rất dài — chỉ cần khi
+// user bấm "Xem bản gốc", lúc đó lấy từ response POST). Cùng lý do POST_COLUMNS bỏ `raw`.
+const COMPETITOR_POST_COLUMNS = `
+  id, competitor_page_id, fb_post_id, permalink, caption, media_type, media_url,
+  fb_created_at, raw, scraped_at, created_at,
+  story_analysis, prompt_image, prompt_video, prompt_model, prompt_at, prompt_error
+`;
+
 export interface CompetitorPostWithComments extends CompetitorPostRow {
   comments: CompetitorCommentRow[];
 }
@@ -242,7 +251,7 @@ export async function getCompetitorPageWithPosts(id: string): Promise<Competitor
 
   const { data: posts } = await db
     .from('competitor_post')
-    .select('*, competitor_comment(*)')
+    .select(`${COMPETITOR_POST_COLUMNS}, competitor_comment(*)`)
     .eq('competitor_page_id', id)
     .order('fb_created_at', { ascending: false, nullsFirst: false })
     .order('scraped_at', { ascending: false });
@@ -252,4 +261,12 @@ export async function getCompetitorPageWithPosts(id: string): Promise<Competitor
     return { ...rest, comments: competitor_comment ?? [] } as CompetitorPostWithComments;
   });
   return { page: page as CompetitorPageRow, posts: mapped };
+}
+
+// Mega-prompt gửi Gemini. Null = migration 0009 chưa chạy hoặc chưa seed.
+export async function getPromptTemplate(kind: 'main' = 'main'): Promise<PromptTemplateRow | null> {
+  const db = createSupabaseAdmin();
+  const { data, error } = await db.from('prompt_template').select('*').eq('kind', kind).maybeSingle();
+  if (error) throw error;
+  return (data as PromptTemplateRow) ?? null;
 }

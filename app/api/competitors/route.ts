@@ -31,11 +31,13 @@ export async function POST(req: NextRequest) {
 
   // Chấp nhận dán cả URL (facebook.com/xxx) — tự tách handle.
   const raw = body.handle?.trim() ?? "";
-  const handle = raw
+  const path = raw
     .replace(/^https?:\/\/(www\.|m\.|web\.)?facebook\.com\//i, "")
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/\?.*$/, "")
-    .replace(/^profile\.php\?id=/i, "");
+    .replace(/^\/+/, "");
+  // profile.php phải bắt id TRƯỚC khi cắt query — cắt trước thì còn trơ lại "profile.php".
+  // Query có thể còn tham số khác (vd ?id=123&locale=vi_VN) nên match id ở vị trí bất kỳ.
+  const profileId = path.match(/^profile\.php\?(?:.*&)?id=(\d+)/i);
+  const handle = profileId ? profileId[1] : path.replace(/\?.*$/, "").replace(/\/+$/, "");
   if (!handle) {
     return NextResponse.json({ error: "Thiếu handle (vanity hoặc ID số)" }, { status: 400 });
   }

@@ -87,6 +87,7 @@ export interface CompetitorPageRow {
   last_scraped_at: string | null;
   scrape_requested_at: string | null; // nút "Cào ngay" set = now(); worker poll thấy thì cào
   last_error: string | null;
+  fail_count: number; // lượt lỗi LIÊN TIẾP; worker tự set active=false khi bị chặn hoặc đủ 3 lượt
   created_at: string;
   updated_at: string;
 }
@@ -103,6 +104,24 @@ export interface CompetitorPostRow {
   raw: unknown;
   scraped_at: string;
   created_at: string;
+  // Output Gemini đã tách sẵn (0009). Null = chưa bấm "Tạo prompt".
+  story_analysis: string | null; // mục ### STORY ANALYSIS — tham khảo
+  prompt_image: string | null; // mục ### IMAGE PROMPT
+  prompt_video: string | null; // mục ### VIDEO PROMPT
+  prompt_model: string | null;
+  prompt_at: string | null;
+  prompt_error: string | null;
+  // prompt_raw CỐ Ý không có ở đây: rất dài, chỉ trả kèm trong response POST khi cần "Xem bản gốc".
+}
+
+// Mega-prompt gửi Gemini — sửa được trong app tại /prompts (0009).
+export interface PromptTemplateRow {
+  id: string;
+  kind: 'main';
+  label: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CompetitorCommentRow {

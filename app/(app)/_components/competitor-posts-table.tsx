@@ -37,11 +37,13 @@ export function CompetitorPostsTable({
   pageHandle,
   pageId,
   sheetCopiedAt,
+  lastScrapedAt,
 }: {
   posts: CompetitorPostWithComments[];
   pageHandle: string;
   pageId: string;
   sheetCopiedAt: string | null;
+  lastScrapedAt: string | null;
 }) {
   // Link Source: cùng 1 giá trị cho mọi dòng (đang xem 1 page) nhưng vẫn để mỗi dòng một ô,
   // để copy cả hàng ra sheet là đủ 5 cột, không phải tự điền lại nguồn.
@@ -83,7 +85,7 @@ export function CompetitorPostsTable({
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <ExportSheetButton posts={posts} sourceUrl={sourceUrl} pageId={pageId} sheetCopiedAt={sheetCopiedAt} />
+        <ExportSheetButton posts={posts} sourceUrl={sourceUrl} pageId={pageId} sheetCopiedAt={sheetCopiedAt} lastScrapedAt={lastScrapedAt} />
       </div>
 
       {selected.size > 0 && (

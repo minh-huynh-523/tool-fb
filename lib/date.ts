@@ -1,3 +1,15 @@
+/**
+ * Mốc "bây giờ" (ms). Chỉ dùng trong SERVER COMPONENT — nơi mỗi request render đúng một lần
+ * nên đọc đồng hồ là an toàn. Bọc thành hàm vì React Compiler chặn `Date.now()` viết thẳng
+ * trong thân component (rule react-hooks/purity).
+ *
+ * CLIENT component thì KHÔNG dùng hàm này — server và client sẽ ra hai giờ khác nhau, lệch
+ * hydration; bên đó dùng useNow().
+ */
+export function nowMs(): number {
+  return Date.now();
+}
+
 // Mốc đầu ngày theo giờ Việt Nam (UTC+7, không DST), trả về ISO (UTC) để so với cột timestamptz.
 export function startOfTodayVNISO(): string {
   const now = new Date();

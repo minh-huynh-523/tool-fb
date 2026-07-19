@@ -32,19 +32,21 @@ export function ExportSheetButton({
   sourceUrl,
   pageId,
   sheetCopiedAt,
+  lastScrapedAt,
   windowHours = 6,
 }: {
   posts: CompetitorPostWithComments[];
   sourceUrl: string;
   pageId: string;
   sheetCopiedAt: string | null;
+  lastScrapedAt: string | null;
   windowHours?: number;
 }) {
   const [copied, setCopied] = useState(false);
   const router = useRouter();
-  const state = sheetState(sheetCopiedAt, posts[0]?.fb_created_at ?? null);
 
   const now = useNow();
+  const state = sheetState(sheetCopiedAt, posts[0]?.fb_created_at ?? null, lastScrapedAt, now);
 
   // Lọc theo GIỜ ĐĂNG chứ không phải giờ cào: "bài trong 6h" tính từ bây giờ.
   // Bài không rõ giờ đăng (fb_created_at null) bị loại — không chứng minh được là bài mới.

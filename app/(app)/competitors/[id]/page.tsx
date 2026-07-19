@@ -56,6 +56,7 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
           pageHandle={page.handle}
           pageId={page.id}
           sheetCopiedAt={page.sheet_copied_at}
+          lastScrapedAt={page.last_scraped_at}
         />
       )}
     </div>

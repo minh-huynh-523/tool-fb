@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { listCompetitorPages } from "@/lib/queries";
 import { sheetState } from "@/lib/sheet-state";
-import { formatVN } from "@/lib/date";
+import { formatVN, nowMs } from "@/lib/date";
 import { AddCompetitorForm } from "../_components/add-competitor-form";
 import { CompetitorActions } from "../_components/competitor-actions";
 import { SheetStateBadge } from "../_components/sheet-state-badge";
@@ -73,6 +73,10 @@ function Pills({
 export default async function CompetitorsPage({ searchParams }: { searchParams: Promise<CompetitorsSP> }) {
   const sp = await searchParams;
   const all = await listCompetitorPages();
+
+  // Mốc "bây giờ" để biết dấu 'đã copy' còn trong ngày không. Đọc đồng hồ ở đây an toàn vì
+  // đây là server component force-dynamic — render lại mỗi request, không hydrate ở client.
+  const now = nowMs();
 
   // "Đã cào" = đã có bài trong DB. Khác với "active" (đang theo dõi) và khác "cào lần cuối"
   // (có thể đã chạy nhưng bị chặn nên 0 bài).
@@ -184,7 +188,7 @@ export default async function CompetitorsPage({ searchParams }: { searchParams: 
                 </td>
                 <td className="px-4 py-3">
                   <SheetStateBadge
-                    state={sheetState(p.sheet_copied_at, p.newest_post_at)}
+                    state={sheetState(p.sheet_copied_at, p.newest_post_at, p.last_scraped_at, now)}
                     copiedAt={p.sheet_copied_at}
                   />
                 </td>

@@ -210,20 +210,35 @@ export async function getLivePostComments(
 // =========================================================
 export interface CompetitorPageWithCount extends CompetitorPageRow {
   post_count: number;
+  newest_post_at: string | null; // giờ đăng của bài mới nhất — để so với sheet_copied_at
 }
+
+// sheetState()/SheetState nằm ở lib/sheet-state.ts — client component cũng cần dùng, mà
+// import từ file này sẽ kéo theo 'server-only'.
 
 export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> {
   const db = createSupabaseAdmin();
+  // newest_post: embed thứ 2 của cùng bảng, sort giảm dần + limit 1 = bài mới nhất.
+  // Rẻ hơn nhiều so với kéo hết post về rồi tự tìm max.
   const { data, error } = await db
     .from('competitor_page')
-    .select('*, competitor_post(count)')
+    .select('*, competitor_post(count), newest_post:competitor_post(fb_created_at)')
+    .order('fb_created_at', { referencedTable: 'newest_post', ascending: false, nullsFirst: false })
+    .limit(1, { referencedTable: 'newest_post' })
     .order('active', { ascending: false })
     .order('name', { ascending: true, nullsFirst: false });
   if (error) throw error;
   // Supabase trả competitor_post: [{ count }] -> phẳng thành post_count.
   return (data ?? []).map((r) => {
-    const { competitor_post, ...rest } = r as CompetitorPageRow & { competitor_post?: Array<{ count: number }> };
-    return { ...rest, post_count: competitor_post?.[0]?.count ?? 0 } as CompetitorPageWithCount;
+    const { competitor_post, newest_post, ...rest } = r as CompetitorPageRow & {
+      competitor_post?: Array<{ count: number }>;
+      newest_post?: Array<{ fb_created_at: string | null }>;
+    };
+    return {
+      ...rest,
+      post_count: competitor_post?.[0]?.count ?? 0,
+      newest_post_at: newest_post?.[0]?.fb_created_at ?? null,
+    } as CompetitorPageWithCount;
   });
 }
 

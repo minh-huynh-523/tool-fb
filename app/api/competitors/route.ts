@@ -16,13 +16,13 @@ export async function GET() {
   }
 }
 
-// POST /api/competitors — thêm 1 handle mới: { handle, kind? }
+// POST /api/competitors — thêm 1 handle mới: { handle, kind?, genre? }
 // Chỉ ghi vào bảng; worker ở laptop sẽ cào (cần active=true + có VPN nếu geo-block).
 export async function POST(req: NextRequest) {
   const auth = await requireUser();
   if (!auth.ok) return auth.res;
 
-  let body: { handle?: string; kind?: string };
+  let body: { handle?: string; kind?: string; genre?: string };
   try {
     body = await req.json();
   } catch {
@@ -47,7 +47,10 @@ export async function POST(req: NextRequest) {
   const db = createSupabaseAdmin();
   const { data, error } = await db
     .from("competitor_page")
-    .upsert({ handle, kind, active: true }, { onConflict: "handle", ignoreDuplicates: true })
+    .upsert(
+      { handle, kind, active: true, genre: body.genre?.trim() || null },
+      { onConflict: "handle", ignoreDuplicates: true },
+    )
     .select("*")
     .maybeSingle();
 

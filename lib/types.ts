@@ -88,6 +88,8 @@ export interface CompetitorPageRow {
   scrape_requested_at: string | null; // nút "Cào ngay" set = now(); worker poll thấy thì cào
   last_error: string | null;
   fail_count: number; // lượt lỗi LIÊN TIẾP; worker tự set active=false khi bị chặn hoặc đủ 3 lượt
+  sheet_copied_at: string | null; // lần bấm "Copy bảng cho Sheet" gần nhất
+  genre: string | null; // loại nội dung: 'Stories Ảnh' | 'Stories Video' | 'Video - Military' | …
   created_at: string;
   updated_at: string;
 }

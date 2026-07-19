@@ -5,9 +5,14 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
 
+// Loại mặc định gợi ý. Không phải danh sách đóng — DB để text tự do, muốn thêm loại mới thì
+// bổ sung ở đây (hoặc sửa thẳng trong DB, pill lọc ở trang danh sách tự sinh theo dữ liệu).
+const GENRES = ["Stories Ảnh", "Stories Video", "Video - Military"];
+
 export function AddCompetitorForm() {
   const router = useRouter();
   const [handle, setHandle] = useState("");
+  const [genre, setGenre] = useState(GENRES[1]);
   const [loading, setLoading] = useState(false);
 
   async function submit(e: React.FormEvent) {
@@ -17,7 +22,7 @@ export function AddCompetitorForm() {
       const { res, data } = await fetchJson("/api/competitors", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle: handle.trim() }),
+        body: JSON.stringify({ handle: handle.trim(), genre }),
       });
       if (!res.ok) {
         toast.error(data.error ?? "Lỗi không xác định");
@@ -45,6 +50,18 @@ export function AddCompetitorForm() {
         required
         className="flex-1 rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm outline-none focus:border-neutral-500 dark:border-neutral-700"
       />
+      <select
+        value={genre}
+        onChange={(e) => setGenre(e.target.value)}
+        title="Loại nội dung của page"
+        className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm outline-none focus:border-neutral-500 dark:border-neutral-700 dark:bg-neutral-900"
+      >
+        {GENRES.map((g) => (
+          <option key={g} value={g}>
+            {g}
+          </option>
+        ))}
+      </select>
       <button
         type="submit"
         disabled={loading}

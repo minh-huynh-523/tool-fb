@@ -7,13 +7,14 @@ export const runtime = "nodejs";
 // PATCH /api/competitors/[id] — cập nhật:
 //   { requestScrape: true }  -> đặt scrape_requested_at = now() (nút "Cào ngay"; worker laptop poll sẽ nhận)
 //   { active: boolean }      -> bật/tắt theo dõi page
+//   { sheetCopied: true }    -> đánh dấu đã copy sang Sheet (set sheet_copied_at = now())
 // Route này KHÔNG chạy browser (Vercel không cào) — chỉ ghi cờ vào DB.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireUser();
   if (!auth.ok) return auth.res;
   const { id } = await params;
 
-  let body: { requestScrape?: boolean; active?: boolean };
+  let body: { requestScrape?: boolean; active?: boolean; sheetCopied?: boolean };
   try {
     body = await req.json();
   } catch {
@@ -23,6 +24,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const patch: Record<string, unknown> = {};
   if (body.requestScrape) patch.scrape_requested_at = new Date().toISOString();
   if (typeof body.active === "boolean") patch.active = body.active;
+  if (body.sheetCopied) patch.sheet_copied_at = new Date().toISOString();
   if (Object.keys(patch).length === 0) {
     return NextResponse.json({ error: "Không có gì để cập nhật" }, { status: 400 });
   }

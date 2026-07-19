@@ -14,7 +14,7 @@ export const scraperConfig = {
   timeoutMs: Number(process.env.FB_SCRAPE_TIMEOUT_MS ?? 45_000),
   maxPosts: Number(process.env.FB_SCRAPE_MAX_POSTS ?? 10),
   // Chỉ giữ bài đăng trong N giờ đổ lại (khớp chu kỳ cron 6h). 0 = tắt lọc (cào bù lịch sử).
-  maxAgeHours: Number(process.env.FB_SCRAPE_MAX_AGE_HOURS ?? 6),
+  maxAgeHours: Number(process.env.FB_SCRAPE_MAX_AGE_HOURS ?? 0),
   scrollRounds: Number(process.env.FB_SCRAPE_SCROLL ?? 6),
   delayMs: Number(process.env.FB_SCRAPE_DELAY_MS ?? 8_000), // nghỉ giữa các page (chống rate-limit)
   pollMs: Number(process.env.FB_SCRAPE_POLL_MS ?? 60_000), // chu kỳ poll đơn on-demand

@@ -3,11 +3,13 @@
 import { useMemo, useState } from "react";
 import { ExternalLink, Sparkles, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { formatVN } from "@/lib/date";
+import { formatVN, relativeVN } from "@/lib/date";
+import { useNow } from "@/lib/use-now";
 import { competitorPageUrl, unwrapFbLink } from "@/lib/fb-link";
 import type { CompetitorPostWithComments } from "@/lib/queries";
 import { CollapsibleText } from "./collapsible-text";
 import { CopyButton } from "./copy-button";
+import { ExportSheetButton } from "./export-sheet-button";
 import { PromptCell } from "./prompt-cell";
 import { useBatchPrompt, type BatchTarget } from "./use-batch-prompt";
 
@@ -33,13 +35,18 @@ function LinkCell({ href, label }: { href: string; label: string }) {
 export function CompetitorPostsTable({
   posts,
   pageHandle,
+  pageId,
+  sheetCopiedAt,
 }: {
   posts: CompetitorPostWithComments[];
   pageHandle: string;
+  pageId: string;
+  sheetCopiedAt: string | null;
 }) {
   // Link Source: cùng 1 giá trị cho mọi dòng (đang xem 1 page) nhưng vẫn để mỗi dòng một ô,
   // để copy cả hàng ra sheet là đủ 5 cột, không phải tự điền lại nguồn.
   const sourceUrl = competitorPageUrl(pageHandle);
+  const now = useNow();
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [overwrite, setOverwrite] = useState(false);
@@ -75,6 +82,10 @@ export function CompetitorPostsTable({
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <ExportSheetButton posts={posts} sourceUrl={sourceUrl} pageId={pageId} sheetCopiedAt={sheetCopiedAt} />
+      </div>
+
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-2.5 text-sm dark:border-neutral-800 dark:bg-neutral-900">
           <span className="font-medium">Đã chọn {selected.size} bài</span>
@@ -113,7 +124,7 @@ export function CompetitorPostsTable({
       )}
 
       <div className="overflow-x-auto rounded-2xl border border-neutral-200 dark:border-neutral-800">
-        <table className="w-full min-w-[1500px] text-sm">
+        <table className="w-full min-w-[1600px] text-sm">
           <thead className="bg-neutral-100 text-left text-neutral-500 dark:bg-neutral-900">
             <tr>
               <th className="w-10 px-3 py-2">
@@ -128,6 +139,7 @@ export function CompetitorPostsTable({
                   className="size-4"
                 />
               </th>
+              <th className="w-32 px-4 py-2 font-medium">Đăng lúc</th>
               <th className="w-24 px-4 py-2 font-medium">Link Source</th>
               <th className="w-28 px-4 py-2 font-medium">Link Post</th>
               <th className="w-[24%] px-4 py-2 font-medium">Caption FB</th>
@@ -145,10 +157,6 @@ export function CompetitorPostsTable({
               // unwrapFbLink cả ở đây (không chỉ lúc cào) để hàng cào TRƯỚC khi có bóc link
               // vẫn hiện URL thật thay vì lớp bọc l.facebook.com — khỏi phải backfill DB.
               const link = unwrapFbLink(post.comments.find((c) => c.link_url)?.link_url);
-              // Đúng thứ tự 5 cột → dán sang sheet là khớp luôn.
-              const allText = [sourceUrl, post.permalink ?? "", post.caption ?? "", part2, link]
-                .filter(Boolean)
-                .join("\n\n");
 
               return (
                 <tr key={post.id} className="border-t border-neutral-200 align-top dark:border-neutral-800">
@@ -161,14 +169,26 @@ export function CompetitorPostsTable({
                     />
                   </td>
 
+                  {/* Đăng lúc: giờ tuyệt đối + "x giờ trước" (biết bài còn tươi hay không) */}
+                  <td className="px-4 py-3">
+                    {post.fb_created_at ? (
+                      <div className="space-y-0.5">
+                        {/* now null = đang render ở server; chờ client mới hiện "x giờ trước" */}
+                        {now !== null && (
+                          <div className="text-xs font-medium">{relativeVN(post.fb_created_at, now)}</div>
+                        )}
+                        <div className="text-xs text-neutral-400">{formatVN(post.fb_created_at)}</div>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-neutral-400" title="FB không trả giờ đăng cho bài này">
+                        không rõ giờ
+                      </span>
+                    )}
+                  </td>
+
                   {/* Link Source: page đối thủ (giống nhau mọi dòng, để copy cả hàng cho đủ cột) */}
                   <td className="px-4 py-3">
                     <LinkCell href={sourceUrl} label={pageHandle} />
-                    {allText && (
-                      <div className="mt-1.5">
-                        <CopyButton text={allText} label="Copy cả 5 cột" title={allText} />
-                      </div>
-                    )}
                   </td>
 
                   {/* Link Post: ảnh + giờ đăng + permalink bài gốc */}
@@ -177,13 +197,9 @@ export function CompetitorPostsTable({
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={post.media_url} alt="" className="mb-1.5 h-16 w-16 rounded-lg object-cover" />
                     )}
-                    <div className="text-xs text-neutral-400">
-                      {post.fb_created_at ? formatVN(post.fb_created_at) : "—"}
-                    </div>
                     {post.permalink ? (
-                      <div className="mt-1 space-y-1">
+                      <div className="mt-1">
                         <LinkCell href={post.permalink} label="bài gốc" />
-                        <CopyButton text={post.permalink} label="Copy link post" title={post.permalink} />
                       </div>
                     ) : (
                       <span className="text-xs text-neutral-400">—</span>
@@ -221,10 +237,7 @@ export function CompetitorPostsTable({
                   {/* Link Comment Post: link bài đầy đủ page đối thủ để trong comment */}
                   <td className="px-4 py-3">
                     {link ? (
-                      <div className="space-y-1.5">
-                        <LinkCell href={link} label={link} />
-                        <CopyButton text={link} label="Copy link" title={link} />
-                      </div>
+                      <LinkCell href={link} label={link} />
                     ) : (
                       <span className="text-neutral-400">—</span>
                     )}

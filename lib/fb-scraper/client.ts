@@ -66,6 +66,20 @@ async function collectFeed(context: BrowserContext, handle: string): Promise<Scr
     throw new BlockedError(`Bị chặn khi mở "${handle}" (bot-detect/geo/audience) — thử VPN nước khác hoặc kiểm tra cookie`);
   }
 
+  // Màn hình ĐẦU TIÊN không đi qua /api/graphql: FB nhúng thẳng JSON vào <script> của trang.
+  // Chỉ nghe response GraphQL thì mất đúng mấy bài MỚI NHẤT (chỉ thấy từ trang 2 trở đi) —
+  // nên phải bốc thêm JSON nhúng sẵn này.
+  const inlineJson: string[] = await page
+    .$$eval('script[type="application/json"]', (els) => els.map((e) => e.textContent ?? ''))
+    .catch(() => []);
+  for (const raw of inlineJson) {
+    try {
+      fragments.push(JSON.parse(raw));
+    } catch {
+      /* không phải JSON hợp lệ, bỏ */
+    }
+  }
+
   // Scroll để nạp thêm post + comment preview (mỗi vòng nghỉ cho GraphQL kịp trả).
   for (let i = 0; i < scraperConfig.scrollRounds; i++) {
     await page.mouse.wheel(0, 2400);

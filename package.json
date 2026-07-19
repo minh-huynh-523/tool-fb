@@ -12,7 +12,8 @@
     "lint": "eslint",
     "fb-login": "tsx scripts/fb-login.ts",
     "worker": "tsx --env-file=.env.local scripts/scrape-worker.ts",
-    "worker:once": "tsx --env-file=.env.local scripts/scrape-worker.ts --once"
+    "worker:once": "tsx --env-file=.env.local scripts/scrape-worker.ts --once",
+    "worker:dry": "tsx --env-file=.env.local scripts/scrape-worker.ts --dry"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

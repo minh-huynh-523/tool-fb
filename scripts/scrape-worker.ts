@@ -51,8 +51,38 @@ async function runDaemon() {
   await scrapeAllActive().catch((e) => console.error('[startup] lỗi:', e.message));
 }
 
+/**
+ * Cào 1 page rồi CHỈ IN RA, không ghi DB, không lọc 6h — để soi worker thật sự thấy gì:
+ * mỗi bài in giờ đăng + tuổi + đầu caption. Bài nào "giờ: không rõ" nghĩa là parser không
+ * bắt được creation_time (bài đó sẽ bị bộ lọc 6h loại).
+ */
+async function runDry(handle: string) {
+  const { scrapeCompetitorPage } = await import('../lib/fb-scraper/client');
+  const saved = scraperConfig.maxAgeHours;
+  scraperConfig.maxAgeHours = 0; // tắt lọc để thấy TOÀN BỘ bài cào được
+  try {
+    const r = await scrapeCompetitorPage(handle);
+    console.log(`\n${r.pageName ?? handle} — ${r.posts.length} bài (chưa lọc):\n`);
+    for (const p of r.posts) {
+      const age = p.createdAt ? `${((Date.now() / 1000 - p.createdAt) / 3600).toFixed(1)}h trước` : '—';
+      const when = p.createdAt ? new Date(p.createdAt * 1000).toLocaleString('vi-VN') : 'không rõ';
+      console.log(`• ${when.padEnd(22)} ${age.padEnd(12)} ${(p.caption || '(không caption)').slice(0, 60).replace(/\n/g, ' ')}`);
+    }
+    const noTime = r.posts.filter((p) => !p.createdAt).length;
+    if (noTime) console.log(`\n⚠ ${noTime}/${r.posts.length} bài không rõ giờ → sẽ bị bộ lọc ${saved}h loại.`);
+  } finally {
+    scraperConfig.maxAgeHours = saved;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--dry')) {
+    const handle = args.find((a) => !a.startsWith('--'));
+    if (!handle) throw new Error('--dry cần 1 handle. VD: npm run worker:dry pacaropaamerica');
+    await runDry(handle);
+    process.exit(0);
+  }
   if (args.includes('--once')) {
     const handle = args.find((a) => !a.startsWith('--'));
     await runOnce(handle);

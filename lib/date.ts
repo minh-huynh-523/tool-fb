@@ -40,6 +40,23 @@ export function isoToVnLocal(iso: string): string {
   return `${vn.getUTCFullYear()}-${p(vn.getUTCMonth() + 1)}-${p(vn.getUTCDate())}T${p(vn.getUTCHours())}:${p(vn.getUTCMinutes())}`;
 }
 
+/**
+ * Khoảng cách thời gian dạng người đọc: "vừa xong" / "12 phút trước" / "3 giờ trước".
+ * Nhận `now` từ ngoài (thay vì gọi Date.now()) để hàm thuần — component lấy now qua useNow().
+ */
+export function relativeVN(iso: string | null, now: number): string {
+  if (!iso) return "—";
+  const ms = now - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "—";
+  if (ms < 0) return "sắp tới"; // giờ máy lệch, hoặc FB trả giờ tương lai
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return "vừa xong";
+  if (mins < 60) return `${mins} phút trước`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} giờ trước`;
+  return `${Math.floor(hours / 24)} ngày trước`;
+}
+
 // Format hiển thị ngắn theo giờ VN.
 export function formatVN(iso: string | null): string {
   if (!iso) return "—";

@@ -25,7 +25,14 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {page.picture && <img src={page.picture} alt="" className="h-11 w-11 rounded-full" />}
           <div>
-            <h1 className="text-xl font-semibold">{page.name ?? page.handle}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-semibold">{page.name ?? page.handle}</h1>
+              {page.genre && (
+                <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                  {page.genre}
+                </span>
+              )}
+            </div>
             <div className="text-xs text-neutral-500">
               <span className="font-mono">{page.handle}</span>
               {" · "}
@@ -44,7 +51,12 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
           Chưa cào được bài nào. Bấm <b>Cào ngay</b> (worker ở laptop cần đang chạy).
         </div>
       ) : (
-        <CompetitorPostsTable posts={posts} pageHandle={page.handle} />
+        <CompetitorPostsTable
+          posts={posts}
+          pageHandle={page.handle}
+          pageId={page.id}
+          sheetCopiedAt={page.sheet_copied_at}
+        />
       )}
     </div>
   );

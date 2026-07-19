@@ -60,6 +60,43 @@ function str(v: unknown): string | null {
   return typeof v === 'string' ? v : null;
 }
 
+// Unix giây hợp lệ: sau 2010 và không quá 1 ngày ở tương lai (loại số rác bắt nhầm).
+const MIN_TS = 1_262_304_000; // 2010-01-01
+function sane(ts: number): number | null {
+  const s = ts > 1e12 ? Math.floor(ts / 1000) : ts; // vài field trả milli giây
+  return s >= MIN_TS && s < Date.now() / 1000 + 86_400 ? s : null;
+}
+
+/**
+ * Giờ đăng của post.
+ *
+ * KHÔNG chỉ đọc node.creation_time: node mang post_id/message thường KHÔNG có creation_time,
+ * FB để nó ở nhánh con (comet_sections → metadata → story). Bản cũ chỉ đọc top-level nên hầu hết
+ * bài ra null — kết hợp với bộ lọc 6h thành ra loại sạch cả bài mới. Giờ tìm cả trong nhánh con,
+ * DFS nên gặp node nông nhất trước (bài chính), tránh vớ phải giờ của bài share lồng bên trong.
+ */
+function extractCreatedAt(node: Record<string, unknown>): number | null {
+  if (typeof node.creation_time === 'number') {
+    const top = sane(node.creation_time);
+    if (top !== null) return top;
+  }
+  let found: number | null = null;
+  walk(node, (n) => {
+    if (found !== null) return;
+    for (const key of ['creation_time', 'publish_time', 'created_time']) {
+      const v = n[key];
+      if (typeof v === 'number') {
+        const s = sane(v);
+        if (s !== null) {
+          found = s;
+          return;
+        }
+      }
+    }
+  });
+  return found;
+}
+
 // Lấy ảnh đại diện của post từ attachments (best-effort qua nhiều biến thể schema).
 function extractMedia(node: Record<string, unknown>): { type: string | null; url: string | null } {
   let url: string | null = null;
@@ -92,11 +129,22 @@ export interface ParseResult {
 export function parseFeed(fragments: unknown[], pageIdHint?: string | null): ParseResult {
   const posts = new Map<string, ParsedPost>();
   const commentsByPost = new Map<string, ParsedComment[]>();
+  // Giờ đăng nằm ở node KHÁC với node chứa caption, dù cùng post_id: node "message" có
+  // caption/attachments nhưng không có creation_time, node feed-unit thì ngược lại. Gom riêng
+  // rồi ghép theo post_id — y như cách comment được ghép.
+  const timeByPost = new Map<string, number>();
   let pageName: string | null = null;
   let detectedPageId: string | null = null;
 
   for (const frag of fragments) {
     walk(frag, (node) => {
+      // ---- GIỜ ĐĂNG ---- (bất kỳ node nào có post_id + creation_time, kể cả không có message)
+      const anyPostId = str(node.post_id);
+      if (anyPostId && typeof node.creation_time === 'number') {
+        const ts = sane(node.creation_time);
+        if (ts !== null && !timeByPost.has(anyPostId)) timeByPost.set(anyPostId, ts);
+      }
+
       // ---- POST node ----
       const postId = str(node.post_id);
       const message = node.message as Record<string, unknown> | undefined;
@@ -116,7 +164,7 @@ export function parseFeed(fragments: unknown[], pageIdHint?: string | null): Par
           caption,
           mediaType: type,
           mediaUrl: url,
-          createdAt: typeof node.creation_time === 'number' ? node.creation_time : null,
+          createdAt: extractCreatedAt(node),
           comments: [],
         });
       }
@@ -148,6 +196,8 @@ export function parseFeed(fragments: unknown[], pageIdHint?: string | null): Par
   // Gắn comment CỦA CHÍNH PAGE về post.
   const pageId = pageIdHint ?? detectedPageId;
   for (const [postId, post] of posts) {
+    // Node caption thường không mang giờ → lấy từ bảng gom riêng.
+    post.createdAt ??= timeByPost.get(postId) ?? null;
     const all = commentsByPost.get(postId) ?? [];
     post.comments = all.filter((c) =>
       pageId ? c.authorId === pageId : pageName ? c.authorName === pageName : true,

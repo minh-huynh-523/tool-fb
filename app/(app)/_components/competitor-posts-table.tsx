@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { ExternalLink, Sparkles, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatVN } from "@/lib/date";
+import { competitorPageUrl, unwrapFbLink } from "@/lib/fb-link";
 import type { CompetitorPostWithComments } from "@/lib/queries";
 import { CollapsibleText } from "./collapsible-text";
 import { CopyButton } from "./copy-button";
@@ -13,7 +14,33 @@ import { useBatchPrompt, type BatchTarget } from "./use-batch-prompt";
 // Bảng bài đối thủ. Là client component vì cần state chọn nhiều dòng dùng chung
 // (checkbox + "chọn tất cả" + chạy prompt hàng loạt). Page vẫn là server component.
 
-export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComments[] }) {
+// Link 1 dòng, dài thì cắt bằng CSS + hover ra full (repo không có component Tooltip).
+function LinkCell({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={href}
+      className="inline-flex max-w-full items-center gap-1 text-xs text-blue-600 hover:underline"
+    >
+      <ExternalLink className="size-3 shrink-0" />
+      <span className="line-clamp-1 break-all">{label}</span>
+    </a>
+  );
+}
+
+export function CompetitorPostsTable({
+  posts,
+  pageHandle,
+}: {
+  posts: CompetitorPostWithComments[];
+  pageHandle: string;
+}) {
+  // Link Source: cùng 1 giá trị cho mọi dòng (đang xem 1 page) nhưng vẫn để mỗi dòng một ô,
+  // để copy cả hàng ra sheet là đủ 5 cột, không phải tự điền lại nguồn.
+  const sourceUrl = competitorPageUrl(pageHandle);
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [overwrite, setOverwrite] = useState(false);
   const { state, run, stop } = useBatchPrompt();
@@ -86,7 +113,7 @@ export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComme
       )}
 
       <div className="overflow-x-auto rounded-2xl border border-neutral-200 dark:border-neutral-800">
-        <table className="w-full min-w-[1100px] text-sm">
+        <table className="w-full min-w-[1500px] text-sm">
           <thead className="bg-neutral-100 text-left text-neutral-500 dark:bg-neutral-900">
             <tr>
               <th className="w-10 px-3 py-2">
@@ -101,10 +128,12 @@ export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComme
                   className="size-4"
                 />
               </th>
-              <th className="w-28 px-4 py-2 font-medium">Bài</th>
-              <th className="w-[28%] px-4 py-2 font-medium">Caption FB</th>
-              <th className="px-4 py-2 font-medium">Comment của page (Part 2 + link)</th>
-              <th className="w-[30%] px-4 py-2 font-medium">Prompt</th>
+              <th className="w-24 px-4 py-2 font-medium">Link Source</th>
+              <th className="w-28 px-4 py-2 font-medium">Link Post</th>
+              <th className="w-[24%] px-4 py-2 font-medium">Caption FB</th>
+              <th className="w-[24%] px-4 py-2 font-medium">Part 2</th>
+              <th className="w-44 px-4 py-2 font-medium">Link Comment Post</th>
+              <th className="w-[24%] px-4 py-2 font-medium">Prompt</th>
             </tr>
           </thead>
           <tbody>
@@ -113,8 +142,13 @@ export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComme
                 .map((c) => (c.message ?? "").trim())
                 .filter(Boolean)
                 .join("\n\n");
-              const link = post.comments.find((c) => c.link_url)?.link_url ?? "";
-              const allText = [post.caption ?? "", part2, link].filter(Boolean).join("\n\n");
+              // unwrapFbLink cả ở đây (không chỉ lúc cào) để hàng cào TRƯỚC khi có bóc link
+              // vẫn hiện URL thật thay vì lớp bọc l.facebook.com — khỏi phải backfill DB.
+              const link = unwrapFbLink(post.comments.find((c) => c.link_url)?.link_url);
+              // Đúng thứ tự 5 cột → dán sang sheet là khớp luôn.
+              const allText = [sourceUrl, post.permalink ?? "", post.caption ?? "", part2, link]
+                .filter(Boolean)
+                .join("\n\n");
 
               return (
                 <tr key={post.id} className="border-t border-neutral-200 align-top dark:border-neutral-800">
@@ -127,7 +161,17 @@ export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComme
                     />
                   </td>
 
-                  {/* Bài: ảnh + thời gian + link gốc */}
+                  {/* Link Source: page đối thủ (giống nhau mọi dòng, để copy cả hàng cho đủ cột) */}
+                  <td className="px-4 py-3">
+                    <LinkCell href={sourceUrl} label={pageHandle} />
+                    {allText && (
+                      <div className="mt-1.5">
+                        <CopyButton text={allText} label="Copy cả 5 cột" title={allText} />
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Link Post: ảnh + giờ đăng + permalink bài gốc */}
                   <td className="px-4 py-3">
                     {post.media_url && (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -136,24 +180,17 @@ export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComme
                     <div className="text-xs text-neutral-400">
                       {post.fb_created_at ? formatVN(post.fb_created_at) : "—"}
                     </div>
-                    {post.permalink && (
-                      <a
-                        href={post.permalink}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-1 inline-flex items-center gap-1 text-xs text-neutral-500 hover:text-foreground"
-                      >
-                        <ExternalLink className="size-3" /> bài gốc
-                      </a>
-                    )}
-                    {allText && (
-                      <div className="mt-1.5">
-                        <CopyButton text={allText} label="Copy tất cả" title="Caption + part 2 + link" />
+                    {post.permalink ? (
+                      <div className="mt-1 space-y-1">
+                        <LinkCell href={post.permalink} label="bài gốc" />
+                        <CopyButton text={post.permalink} label="Copy link post" title={post.permalink} />
                       </div>
+                    ) : (
+                      <span className="text-xs text-neutral-400">—</span>
                     )}
                   </td>
 
-                  {/* Caption + nút copy */}
+                  {/* Caption FB */}
                   <td className="px-4 py-3">
                     {post.caption ? (
                       <div className="space-y-1.5">
@@ -167,34 +204,29 @@ export function CompetitorPostsTable({ posts }: { posts: CompetitorPostWithComme
                     )}
                   </td>
 
-                  {/* Comment của page: mỗi comment 1 khối, có copy text + copy link */}
+                  {/* Part 2: nội dung comment của chính page (nhiều comment thì nối lại) */}
                   <td className="px-4 py-3">
-                    {post.comments.length === 0 ? (
-                      <span className="text-neutral-400">(chưa có comment của page)</span>
-                    ) : (
-                      <div className="space-y-3">
-                        {post.comments.map((c) => (
-                          <div key={c.id} className="space-y-1.5">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {c.message && <CopyButton text={c.message} label="Copy comment" />}
-                              {c.link_url && <CopyButton text={c.link_url} label="Copy link" title={c.link_url} />}
-                            </div>
-                            {c.message && <CollapsibleText text={c.message} />}
-                            {c.link_url && (
-                              <a
-                                href={c.link_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                title={c.link_url}
-                                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-                              >
-                                <ExternalLink className="size-3 shrink-0" />
-                                <span className="line-clamp-1 break-all">{c.link_url}</span>
-                              </a>
-                            )}
-                          </div>
-                        ))}
+                    {part2 ? (
+                      <div className="space-y-1.5">
+                        <div className="flex justify-end">
+                          <CopyButton text={part2} label="Copy part 2" />
+                        </div>
+                        <CollapsibleText text={part2} />
                       </div>
+                    ) : (
+                      <span className="text-neutral-400">(chưa có comment của page)</span>
+                    )}
+                  </td>
+
+                  {/* Link Comment Post: link bài đầy đủ page đối thủ để trong comment */}
+                  <td className="px-4 py-3">
+                    {link ? (
+                      <div className="space-y-1.5">
+                        <LinkCell href={link} label={link} />
+                        <CopyButton text={link} label="Copy link" title={link} />
+                      </div>
+                    ) : (
+                      <span className="text-neutral-400">—</span>
                     )}
                   </td>
 

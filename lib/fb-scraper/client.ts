@@ -6,10 +6,9 @@ import { type BrowserContext } from 'playwright';
 import { launchStealth } from './browser';
 import { scraperConfig } from './config';
 import { parseFeed, type ParsedPost } from './parse';
+import { competitorPageUrl } from '../fb-link';
 
 const isNumeric = (h: string) => /^\d+$/.test(h);
-const pageUrl = (h: string) =>
-  isNumeric(h) ? `https://www.facebook.com/profile.php?id=${h}` : `https://www.facebook.com/${h}`;
 
 // FB báo bị chặn (bot-detect / geo / audience). Ném lỗi rõ để worker ghi last_error.
 const BLOCKED_MARKERS = [
@@ -57,7 +56,7 @@ async function collectFeed(context: BrowserContext, handle: string): Promise<Scr
     }
   });
 
-  await page.goto(pageUrl(handle), { waitUntil: 'domcontentloaded', timeout: scraperConfig.timeoutMs });
+  await page.goto(competitorPageUrl(handle), { waitUntil: 'domcontentloaded', timeout: scraperConfig.timeoutMs });
   await page.waitForTimeout(3000);
 
   // Kiểm tra bị chặn NGAY (trước khi phí công scroll).

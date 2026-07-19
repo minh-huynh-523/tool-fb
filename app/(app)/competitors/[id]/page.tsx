@@ -44,7 +44,7 @@ export default async function CompetitorDetailPage({ params }: { params: Promise
           Chưa cào được bài nào. Bấm <b>Cào ngay</b> (worker ở laptop cần đang chạy).
         </div>
       ) : (
-        <CompetitorPostsTable posts={posts} />
+        <CompetitorPostsTable posts={posts} pageHandle={page.handle} />
       )}
     </div>
   );

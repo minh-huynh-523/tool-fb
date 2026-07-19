@@ -7,6 +7,7 @@
  *
  * Chỉ giữ comment của CHÍNH page: lọc author.id === pageId (fallback author.name === pageName).
  */
+import { unwrapFbLink } from '../fb-link';
 
 export interface ParsedComment {
   fbCommentId: string | null;
@@ -49,9 +50,10 @@ function decodeCommentId(id: string): { postId: string; commentFbid: string } | 
 }
 
 // URL đầu tiên trong text (first-comment kiểu "Full story: https://…").
+// FB bọc link ngoài qua l.facebook.com/l.php?u=… → bóc ra URL thật rồi mới lưu.
 function extractLink(text: string): string | null {
   const m = text.match(/https?:\/\/[^\s)]+/i);
-  return m ? m[0] : null;
+  return m ? unwrapFbLink(m[0]) : null;
 }
 
 function str(v: unknown): string | null {

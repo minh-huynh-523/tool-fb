@@ -1,15 +1,8 @@
 import 'server-only';
 import xmlrpc from 'xmlrpc';
+import type { WpSite } from './site';
 
-function cfg() {
-  const url = process.env.WP_XMLRPC_URL;
-  const user = process.env.WP_USER;
-  const password = process.env.WP_PASSWORD;
-  if (!url || !user || !password) {
-    throw new Error('Thiếu WP_XMLRPC_URL / WP_USER / WP_PASSWORD trong .env.local');
-  }
-  return { url, user, password };
-}
+// Site đích (URL + creds) do caller resolve theo page — xem lib/wordpress/site.ts.
 
 // Gọi 1 method XML-RPC, promisify callback của lib. Lỗi fault -> ném kèm faultString.
 function call<T = unknown>(url: string, method: string, params: unknown[]): Promise<T> {
@@ -32,8 +25,11 @@ export interface WpUploaded {
 }
 
 // wp.uploadFile -> upload media, trả attachment {id, url}. bits: Buffer (lib serialize base64).
-export async function wpUploadFile(input: { name: string; type: string; bits: Buffer }): Promise<WpUploaded> {
-  const { url, user, password } = cfg();
+export async function wpUploadFile(
+  site: WpSite,
+  input: { name: string; type: string; bits: Buffer },
+): Promise<WpUploaded> {
+  const { xmlrpcUrl: url, user, password } = site;
   const res = await call<{ id?: number | string; attachment_id?: number | string; url?: string }>(
     url,
     'wp.uploadFile',
@@ -60,14 +56,17 @@ export function slugifyTitle(title: string): string {
 // wp.getPost -> { link, slug, status, title }. Bài publish: link là pretty permalink; draft: link dạng ?p=ID
 // nhưng slug (post_name) có sẵn do mình set lúc tạo -> caller tự dựng pretty link.
 // Không throw: lỗi trả null hết để caller fallback.
-export async function wpGetPostInfo(postId: string): Promise<{
+export async function wpGetPostInfo(
+  site: WpSite,
+  postId: string,
+): Promise<{
   link: string | null;
   slug: string | null;
   status: string | null;
   title: string | null;
 }> {
   try {
-    const { url, user, password } = cfg();
+    const { xmlrpcUrl: url, user, password } = site;
     const res = await call<{ link?: string; post_name?: string; post_status?: string; post_title?: string }>(
       url,
       'wp.getPost',
@@ -85,15 +84,18 @@ export async function wpGetPostInfo(postId: string): Promise<{
 }
 
 // wp.newPost -> tạo bài (mặc định draft, truyền status: 'publish' để đăng luôn). Trả về post id (string).
-export async function wpNewPostDraft(input: {
-  title: string;
-  contentHtml: string;
-  excerpt?: string;
-  thumbnailId?: string;
-  categories?: string[];
-  status?: 'draft' | 'publish';
-}): Promise<string> {
-  const { url, user, password } = cfg();
+export async function wpNewPostDraft(
+  site: WpSite,
+  input: {
+    title: string;
+    contentHtml: string;
+    excerpt?: string;
+    thumbnailId?: string;
+    categories?: string[];
+    status?: 'draft' | 'publish';
+  },
+): Promise<string> {
+  const { xmlrpcUrl: url, user, password } = site;
   const content: Record<string, unknown> = {
     post_type: 'post',
     post_status: input.status ?? 'draft',

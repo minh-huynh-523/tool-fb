@@ -2,7 +2,16 @@ import 'server-only';
 import { createSupabaseAdmin } from './supabase/admin';
 import { decryptToken } from './crypto';
 import { getPostComments, type FbComment } from './facebook/client';
-import type { CommentHistoryRow, CommentStatus, FacebookPageRow, PostRow, ScheduledCommentRow } from './types';
+import type {
+  CommentHistoryRow,
+  CommentStatus,
+  CompetitorCommentRow,
+  CompetitorPageRow,
+  CompetitorPostRow,
+  FacebookPageRow,
+  PostRow,
+  ScheduledCommentRow,
+} from './types';
 
 export type SafePage = Omit<FacebookPageRow, 'access_token'>;
 
@@ -14,7 +23,7 @@ export async function listPages(): Promise<SafePage[]> {
   const db = createSupabaseAdmin();
   const { data, error } = await db
     .from('facebook_page')
-    .select('id, page_id, name, picture, token_expires_at, created_at, updated_at')
+    .select('id, page_id, name, picture, token_expires_at, wp_xmlrpc_url, wp_base_url, wp_category, created_at, updated_at')
     .order('created_at', { ascending: true });
   if (error) throw error;
   return (data ?? []) as SafePage[];
@@ -193,4 +202,54 @@ export async function getLivePostComments(
   } catch {
     return null; // thiếu quyền / FB lỗi -> không chặn trang chi tiết
   }
+}
+
+// =========================================================
+// Page ĐỐI THỦ (cào bằng worker Playwright ở laptop) — Vercel CHỈ đọc.
+// =========================================================
+export interface CompetitorPageWithCount extends CompetitorPageRow {
+  post_count: number;
+}
+
+export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> {
+  const db = createSupabaseAdmin();
+  const { data, error } = await db
+    .from('competitor_page')
+    .select('*, competitor_post(count)')
+    .order('active', { ascending: false })
+    .order('name', { ascending: true, nullsFirst: false });
+  if (error) throw error;
+  // Supabase trả competitor_post: [{ count }] -> phẳng thành post_count.
+  return (data ?? []).map((r) => {
+    const { competitor_post, ...rest } = r as CompetitorPageRow & { competitor_post?: Array<{ count: number }> };
+    return { ...rest, post_count: competitor_post?.[0]?.count ?? 0 } as CompetitorPageWithCount;
+  });
+}
+
+export interface CompetitorPostWithComments extends CompetitorPostRow {
+  comments: CompetitorCommentRow[];
+}
+export interface CompetitorPageDetail {
+  page: CompetitorPageRow;
+  posts: CompetitorPostWithComments[];
+}
+
+export async function getCompetitorPageWithPosts(id: string): Promise<CompetitorPageDetail | null> {
+  const db = createSupabaseAdmin();
+  const { data: page, error } = await db.from('competitor_page').select('*').eq('id', id).maybeSingle();
+  if (error) throw error;
+  if (!page) return null;
+
+  const { data: posts } = await db
+    .from('competitor_post')
+    .select('*, competitor_comment(*)')
+    .eq('competitor_page_id', id)
+    .order('fb_created_at', { ascending: false, nullsFirst: false })
+    .order('scraped_at', { ascending: false });
+
+  const mapped = (posts ?? []).map((p) => {
+    const { competitor_comment, ...rest } = p as CompetitorPostRow & { competitor_comment?: CompetitorCommentRow[] };
+    return { ...rest, comments: competitor_comment ?? [] } as CompetitorPostWithComments;
+  });
+  return { page: page as CompetitorPageRow, posts: mapped };
 }

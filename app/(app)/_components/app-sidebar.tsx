@@ -3,13 +3,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, FileText, LayoutDashboard, Menu, X } from "lucide-react";
+import { Building2, FileText, LayoutDashboard, Menu, Swords, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LogoutButton } from "./logout-button";
 
 const NAV = [
   { href: "/posts", label: "Bài post", icon: FileText },
   { href: "/pages", label: "Pages", icon: Building2 },
+  { href: "/competitors", label: "Đối thủ", icon: Swords },
 ];
 
 export function AppSidebar({ username }: { username: string }) {

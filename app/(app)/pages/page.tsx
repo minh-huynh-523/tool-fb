@@ -25,6 +25,7 @@ export default async function PagesPage() {
             <tr>
               <th className="px-4 py-2 font-medium">Page</th>
               <th className="px-4 py-2 font-medium">page_id</th>
+              <th className="px-4 py-2 font-medium">Site WP</th>
               <th className="px-4 py-2 font-medium">Cập nhật</th>
               <th className="px-4 py-2 text-right font-medium">Thao tác</th>
             </tr>
@@ -32,7 +33,7 @@ export default async function PagesPage() {
           <tbody>
             {pages.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-neutral-400">
+                <td colSpan={5} className="px-4 py-8 text-center text-neutral-400">
                   Chưa có page nào. Thêm ở form phía trên.
                 </td>
               </tr>
@@ -47,9 +48,23 @@ export default async function PagesPage() {
                   </div>
                 </td>
                 <td className="px-4 py-3 font-mono text-xs text-neutral-500">{p.page_id}</td>
+                <td className="px-4 py-3 text-xs text-neutral-500">
+                  {p.wp_base_url ? (
+                    <span className="font-mono">{p.wp_base_url.replace(/^https?:\/\//, "")}</span>
+                  ) : (
+                    <span className="text-neutral-400">mặc định (env)</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-neutral-500">{formatVN(p.updated_at)}</td>
                 <td className="px-4 py-3">
-                  <PageRowActions pageId={p.page_id} />
+                  <PageRowActions
+                    pageId={p.page_id}
+                    wpSite={{
+                      wp_xmlrpc_url: p.wp_xmlrpc_url,
+                      wp_base_url: p.wp_base_url,
+                      wp_category: p.wp_category,
+                    }}
+                  />
                 </td>
               </tr>
             ))}

@@ -9,6 +9,10 @@ export interface FacebookPageRow {
   picture: string | null;
   access_token: string;
   token_expires_at: string | null;
+  // Site WordPress đích của page này (null = dùng env mặc định) — xem lib/wordpress/site.ts
+  wp_xmlrpc_url: string | null;
+  wp_base_url: string | null;
+  wp_category: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -68,3 +72,46 @@ export type CommentHistoryRow = Pick<
   ScheduledCommentRow,
   'id' | 'post_id' | 'message' | 'attachment_url' | 'run_after' | 'status' | 'sent_at' | 'error' | 'created_at'
 >;
+
+// =========================================================
+// Theo dõi page đối thủ (cào Playwright, không có token Graph) — bảng 0007.
+// =========================================================
+export interface CompetitorPageRow {
+  id: string;
+  handle: string; // vanity (readfullstory2023) hoặc ID số
+  fb_page_id: string | null;
+  name: string | null;
+  picture: string | null;
+  kind: 'page' | 'profile';
+  active: boolean;
+  last_scraped_at: string | null;
+  scrape_requested_at: string | null; // nút "Cào ngay" set = now(); worker poll thấy thì cào
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompetitorPostRow {
+  id: string;
+  competitor_page_id: string;
+  fb_post_id: string;
+  permalink: string | null;
+  caption: string | null;
+  media_type: string | null;
+  media_url: string | null;
+  fb_created_at: string | null;
+  raw: unknown;
+  scraped_at: string;
+  created_at: string;
+}
+
+export interface CompetitorCommentRow {
+  id: string;
+  competitor_post_id: string;
+  fb_comment_id: string | null;
+  author_name: string | null; // đã lọc author == tên page
+  message: string | null;
+  link_url: string | null; // URL tách từ message/attachment
+  commented_at: string | null;
+  scraped_at: string;
+}

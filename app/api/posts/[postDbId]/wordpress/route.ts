@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { scrapeArticle } from "@/lib/scrape";
 import { wpGetPostInfo, wpNewPostDraft, wpUploadFile } from "@/lib/wordpress/client";
+import { getWpSiteForPost } from "@/lib/wordpress/site";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -69,6 +70,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
   if (postErr) return NextResponse.json({ error: postErr.message }, { status: 500 });
   if (!post) return NextResponse.json({ error: "Không tìm thấy post" }, { status: 404 });
 
+  // Site WP đích lấy theo page của post (mỗi page 1 site); lỗi ở đây là lỗi cấu hình -> 400.
+  let site;
+  try {
+    site = await getWpSiteForPost(db, postDbId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+
   try {
     const article = await scrapeArticle(sourceUrl);
 
@@ -78,7 +87,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
     if (imageMode === "upload" && imageFile) {
       try {
         const buf = Buffer.from(await imageFile.arrayBuffer());
-        const up = await wpUploadFile({
+        const up = await wpUploadFile(site, {
           name: imageFile.name || "featured.jpg",
           type: imageFile.type || "image/jpeg",
           bits: buf,
@@ -95,7 +104,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
         if (!imgRes.ok || !type.startsWith("image/")) throw new Error("link không trả về ảnh");
         const buf = Buffer.from(await imgRes.arrayBuffer());
         const name = imageUrlOverride.split("/").pop()?.split("?")[0] || "featured.jpg";
-        const up = await wpUploadFile({ name, type, bits: buf });
+        const up = await wpUploadFile(site, { name, type, bits: buf });
         if (!up.id) throw new Error("WordPress không trả attachment id");
         thumbnailId = up.id;
       } catch (e) {
@@ -108,7 +117,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
           const buf = Buffer.from(await imgRes.arrayBuffer());
           const type = imgRes.headers.get("content-type") ?? "image/jpeg";
           const name = article.imageUrl.split("/").pop()?.split("?")[0] || "featured.jpg";
-          const up = await wpUploadFile({ name, type, bits: buf });
+          const up = await wpUploadFile(site, { name, type, bits: buf });
           if (up.id) thumbnailId = up.id;
         }
       } catch {
@@ -118,8 +127,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
     // imageMode === "none": không set thumbnail.
 
     const title = titleOverride || article.title || "(không tiêu đề)";
-    const category = process.env.WP_CATEGORY?.trim() || "Story";
-    const wpPostId = await wpNewPostDraft({
+    const category = site.category;
+    const wpPostId = await wpNewPostDraft(site, {
       title,
       contentHtml: article.contentHtml,
       excerpt: article.description,
@@ -127,11 +136,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
       categories: [category],
       status: wpStatus,
     });
-    const base = process.env.WP_BASE_URL ?? "";
+    const base = site.baseUrl;
     const editUrl = base ? `${base}/wp-admin/post.php?post=${wpPostId}&action=edit` : null;
     // Permalink pretty (dạng /slug/): bài publish lấy `link` từ WP; draft thì `link` là ?p=ID
     // -> dựng từ slug (đã set lúc tạo, giữ nguyên khi publish). Fallback cuối: ?p=.
-    const { link, slug } = await wpGetPostInfo(wpPostId);
+    const { link, slug } = await wpGetPostInfo(site, wpPostId);
     const prettyFromSlug = slug && base ? `${base}/${slug}/` : null;
     const permalink =
       (link && !link.includes("?p=") ? link : null) ?? prettyFromSlug ?? link ?? (base ? `${base}/?p=${wpPostId}` : null);

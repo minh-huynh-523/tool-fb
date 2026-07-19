@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { wpGetPostInfo } from "@/lib/wordpress/client";
+import { getWpSiteForPost } from "@/lib/wordpress/site";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -40,8 +41,15 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ po
   if (rowErr) return NextResponse.json({ error: rowErr.message }, { status: 500 });
   if (!row?.wp_post_id) return NextResponse.json({ error: "Post chưa có bài WP" }, { status: 404 });
 
+  let site;
+  try {
+    site = await getWpSiteForPost(db, postDbId);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
+
   // 1) Hỏi WP — nguồn sự thật về status + link hiện tại (bắt được cả slug bị WP đổi).
-  const wp = await wpGetPostInfo(row.wp_post_id);
+  const wp = await wpGetPostInfo(site, row.wp_post_id);
   if (!wp.status) {
     return NextResponse.json(
       { ok: false, reason: "wp_unreachable", message: "Không hỏi được WordPress (bài có thể đã bị xoá)" },
@@ -49,7 +57,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ po
     );
   }
 
-  const base = process.env.WP_BASE_URL ?? "";
+  const base = site.baseUrl;
   const prettyFromSlug = wp.slug && base ? `${base}/${wp.slug}/` : null;
   const permalink =
     (wp.link && !wp.link.includes("?p=") ? wp.link : null) ??

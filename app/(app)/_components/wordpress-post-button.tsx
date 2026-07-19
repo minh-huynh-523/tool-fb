@@ -331,7 +331,8 @@ export function WordpressPostButton({
         <DialogHeader>
           <DialogTitle>Tạo bài WordPress</DialogTitle>
           <DialogDescription>
-            B1: cào bài gốc → B2: xác nhận tiêu đề + ảnh → đăng nháp hoặc đăng luôn trên life.kinhmatquangnhan.vn.
+            B1: cào bài gốc → B2: xác nhận tiêu đề + ảnh → đăng nháp hoặc đăng luôn lên site WordPress của page
+            này (cấu hình ở trang Pages).
           </DialogDescription>
         </DialogHeader>
 

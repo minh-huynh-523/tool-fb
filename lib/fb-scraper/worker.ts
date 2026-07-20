@@ -123,15 +123,29 @@ export async function scrapePages(db: SupabaseClient, pages: CompetitorPageRow[]
  * đối thủ hay thả link vài giờ sau khi đăng. Bài cũ đã quét mà không có link thì bỏ hẳn, nếu
  * không mỗi lượt sẽ phí sạch trần vào mấy bài không bao giờ có link.
  */
-export async function scrapePostLinks(db = createWorkerSupabase()): Promise<{ scanned: number; found: number }> {
+export async function scrapePostLinks(
+  db = createWorkerSupabase(),
+): Promise<{ scanned: number; found: number; unreadable: number }> {
   const { postLinkLimit, postLinkRescanHours } = scraperConfig;
   const rescanCutoff = new Date(Date.now() - postLinkRescanHours * 3600_000).toISOString();
 
   // Hai query rời rồi gộp thay vì một .or(...) lồng and(): so sánh mảng rỗng trong PostgREST
   // (comment_link_urls.eq.{}) dùng đúng ký tự {} mà cú pháp .or() cũng dùng để gom nhóm — dễ
   // parse sai một cách âm thầm. Lọc "chưa có link" bằng JS thì nhìn là biết đúng.
-  type Row = { id: string; permalink: string; links_scanned_at: string | null; comment_link_urls: string[] };
-  const cols = 'id, permalink, fb_created_at, links_scanned_at, comment_link_urls';
+  // handle đi kèm vì reel phải đổi sang URL /{handle}/videos/<id>/ mới đọc được comment
+  // (xem readableUrl trong post-links.ts).
+  // competitor_page nhúng vào là quan hệ MỘT-một, nhưng type sinh ra của Supabase khai là mảng —
+  // nhận cả hai dạng rồi tự chuẩn hoá, khỏi ép kiểu bừa rồi vỡ lúc chạy.
+  type Embedded = { handle: string } | { handle: string }[] | null;
+  type Row = {
+    id: string;
+    permalink: string;
+    links_scanned_at: string | null;
+    comment_link_urls: string[];
+    competitor_page: Embedded;
+  };
+  const handleOf = (e: Embedded): string | null => (Array.isArray(e) ? (e[0]?.handle ?? null) : (e?.handle ?? null));
+  const cols = 'id, permalink, fb_created_at, links_scanned_at, comment_link_urls, competitor_page(handle)';
 
   const [fresh, recent] = await Promise.all([
     // Chưa quét bao giờ.
@@ -159,23 +173,33 @@ export async function scrapePostLinks(db = createWorkerSupabase()): Promise<{ sc
     ...((fresh.data ?? []) as Row[]),
     ...((recent.data ?? []) as Row[]).filter((r) => !(r.comment_link_urls ?? []).length),
   ].slice(0, postLinkLimit);
-  if (!due.length) return { scanned: 0, found: 0 };
+  if (!due.length) return { scanned: 0, found: 0, unreadable: 0 };
 
   console.log(`[link] mở permalink ${due.length} bài (trần ${postLinkLimit})...`);
   const { browser, context } = await launchStealth();
   let scanned = 0;
   let found = 0;
+  let unreadable = 0;
   try {
     for (let i = 0; i < due.length; i++) {
       const p = due[i];
       try {
-        const links = await linksFromPostPage(context, p.permalink);
-        await db
-          .from('competitor_post')
-          .update({ comment_link_urls: links, links_scanned_at: new Date().toISOString() })
-          .eq('id', p.id);
-        scanned++;
-        if (links.length) found++;
+        const { links, rendered } = await linksFromPostPage(context, p.permalink, {
+          handle: handleOf(p.competitor_page),
+        });
+        if (!rendered) {
+          // Không đọc được bài (tường đăng nhập / trang lạ). Đánh dấu đã quét ở đây là khoá
+          // vĩnh viễn một bài có thể đang có link — để nguyên cho lượt sau.
+          unreadable++;
+          console.warn(`[link] không đọc được ${p.permalink.slice(0, 60)} — bỏ qua, KHÔNG đánh dấu đã quét`);
+        } else {
+          await db
+            .from('competitor_post')
+            .update({ comment_link_urls: links, links_scanned_at: new Date().toISOString() })
+            .eq('id', p.id);
+          scanned++;
+          if (links.length) found++;
+        }
       } catch (e) {
         if (e instanceof BlockedError) {
           // Bị chặn = phiên đang bị soi. Cố thêm chỉ tổ đốt cookie đăng nhập -> dừng cả lượt,
@@ -191,8 +215,13 @@ export async function scrapePostLinks(db = createWorkerSupabase()): Promise<{ sc
   } finally {
     await browser.close();
   }
-  console.log(`[link] quét ${scanned} bài, ${found} bài có link`);
-  return { scanned, found };
+  console.log(`[link] quét ${scanned} bài, ${found} bài có link${unreadable ? `, ${unreadable} bài không đọc được` : ''}`);
+  // Không đọc được HÀNG LOẠT gần như luôn là phiên đăng nhập hỏng chứ không phải bài lỗi lẻ —
+  // nói thẳng ra, nếu không lượt nào cũng chạy không công mà nhìn log vẫn tưởng bình thường.
+  if (unreadable > scanned && unreadable > 3) {
+    console.warn(`[link] ⚠ phần lớn bài không đọc được — nhiều khả năng phiên FB đã rớt, chạy lại: npm run fb-login`);
+  }
+  return { scanned, found, unreadable };
 }
 
 /** Cào tất cả page active (cron 6h). */

@@ -112,12 +112,31 @@ export interface FbFeedItem {
     data?: FbComment[];
     summary?: { total_count?: number };
   };
+  // Tổng reaction (mọi loại: like/love/haha/…). Chỉ có ở feed — /scheduled_posts không xin field này.
+  reactions?: {
+    summary?: { total_count?: number };
+  };
 }
 
 export interface FbFeedResponse {
   data: FbFeedItem[];
   paging?: { cursors?: { after?: string }; next?: string };
+  // false = đã fallback vì Graph không nhận field reactions -> reaction_count sẽ là null.
+  reactionsIncluded?: boolean;
 }
+
+const FEED_FIELDS_BASE =
+  'id,message,created_time,permalink_url,status_type,attachments{media_type,type,url,media}' +
+  // Kèm comment inline (1 call) để biết page đã tự comment chưa: from{id} so với page_id.
+  ',comments.summary(true).limit(25){from{id},created_time}';
+
+// limit(0) = CHỈ lấy summary, không kéo về danh sách người thả reaction của từng bài.
+const FEED_FIELDS_WITH_REACTIONS = FEED_FIELDS_BASE + ',reactions.summary(total_count).limit(0)';
+
+// /{pageId}/posts bị pg_cron gọi MỖI PHÚT (migration 0005). Một field sai tên = Graph trả 400 cho
+// CẢ request = chết sạch sync, chứ không phải "thiếu mỗi reaction". Cờ này hạ xuống chuỗi field cũ
+// ngay lần đầu Graph than field lạ, và giữ vậy tới khi tiến trình bị recycle (tự lành nếu FB sửa).
+let reactionsSupported = true;
 
 // Đọc feed của page: GET /{pageId}/posts
 export async function getPageFeed(
@@ -126,14 +145,32 @@ export async function getPageFeed(
   opts: { limit?: number; after?: string } = {},
 ): Promise<FbFeedResponse> {
   const params: GraphParams = {
-    fields:
-      'id,message,created_time,permalink_url,status_type,attachments{media_type,type,url,media}' +
-      // Kèm comment inline (1 call) để biết page đã tự comment chưa: from{id} so với page_id.
-      ',comments.summary(true).limit(25){from{id},created_time}',
+    fields: reactionsSupported ? FEED_FIELDS_WITH_REACTIONS : FEED_FIELDS_BASE,
     limit: opts.limit ?? 25,
   };
   if (opts.after) params.after = opts.after;
-  return callGraph<FbFeedResponse>({ endpoint: `${pageId}/posts`, accessToken, params });
+
+  try {
+    const res = await callGraph<FbFeedResponse>({ endpoint: `${pageId}/posts`, accessToken, params });
+    return { ...res, reactionsIncluded: reactionsSupported };
+  } catch (e) {
+    // Code 100 còn dùng cho cursor/param sai — CHỈ nuốt khi đúng là lỗi tên field, không thì
+    // fallback sẽ che mất lỗi thật và ta mất luôn tín hiệu để sửa.
+    const badField =
+      reactionsSupported &&
+      e instanceof FacebookError &&
+      e.code === 100 &&
+      /nonexisting field|reactions/i.test(e.message);
+    if (!badField) throw e;
+
+    reactionsSupported = false;
+    const res = await callGraph<FbFeedResponse>({
+      endpoint: `${pageId}/posts`,
+      accessToken,
+      params: { ...params, fields: FEED_FIELDS_BASE },
+    });
+    return { ...res, reactionsIncluded: false };
+  }
 }
 
 // Đọc comment top-level của 1 bài (dùng ở trang chi tiết để hiển thị comment thật).

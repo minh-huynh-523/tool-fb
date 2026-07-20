@@ -2,6 +2,7 @@ import 'server-only';
 import { createSupabaseAdmin } from './supabase/admin';
 import { decryptToken } from './crypto';
 import { getPostComments, type FbComment } from './facebook/client';
+import { clampThresholds, type AttentionThresholds } from './attention';
 import type {
   CommentHistoryRow,
   CommentStatus,
@@ -18,7 +19,7 @@ export type SafePage = Omit<FacebookPageRow, 'access_token'>;
 
 // Cột tường minh — KHÔNG lấy `raw` (jsonb lớn, không render) để tránh over-fetch.
 const POST_COLUMNS =
-  'id, page_id, fb_post_id, message, permalink, media_type, media_url, fb_created_at, is_published, scheduled_publish_time, display_time, page_commented, comment_count, page_comment_at, synced_at, created_at';
+  'id, page_id, fb_post_id, message, permalink, media_type, media_url, fb_created_at, is_published, scheduled_publish_time, display_time, page_commented, comment_count, reaction_count, page_comment_at, wp_dismissed_at, synced_at, created_at';
 
 export async function listPages(): Promise<SafePage[]> {
   const db = createSupabaseAdmin();
@@ -59,12 +60,54 @@ function summarize(counts: Partial<Record<CommentStatus, number>>): CommentStatu
   return null;
 }
 
+/**
+ * Vế "đang có tương tác" của hàng đợi WP, dạng filter string của PostgREST.
+ *
+ * clampThresholds() đã ép số nguyên, nhưng clamp LẠI ở đây vì .or() nhận raw string: hàm này là
+ * chỗ duy nhất giá trị chui vào câu query, nên nó phải tự bảo vệ được kể cả khi ai đó gọi thẳng.
+ *
+ * reaction_count NULL tự rớt khỏi vế `gt` (NULL không so sánh được) — đúng ý: bài chưa sync
+ * reaction thì đừng đoán, vẫn còn vế comment để nổi lên.
+ */
+function needsWpOrFilter(t: AttentionThresholds): string {
+  const minR = Math.min(10_000, Math.max(0, Math.trunc(t.minReactions)));
+  const minC = Math.min(10_000, Math.max(1, Math.trunc(t.minComments)));
+  return `reaction_count.gt.${minR},comment_count.gte.${minC}`;
+}
+
+/** Ngưỡng từ env — nguồn sự thật cho badge sidebar. Server-only vì đọc process.env. */
+export function envThresholds(): AttentionThresholds {
+  return clampThresholds(process.env.WP_ATTENTION_MIN_REACTIONS, process.env.WP_ATTENTION_MIN_COMMENTS);
+}
+
+/**
+ * Chỉ ĐẾM cho badge sidebar — head:true để PostgREST không trả về row nào, chỉ header Content-Range.
+ * Phải khớp từng filter với nhánh needsWp ở listPostsWithCommentStatus, nếu không badge sẽ nói
+ * một số mà trang lại hiện số khác.
+ */
+export async function countPostsNeedingWp(t: AttentionThresholds): Promise<number> {
+  const db = createSupabaseAdmin();
+  const { count, error } = await db
+    .from('post')
+    .select('id, scraped_article!left(post_id)', { count: 'exact', head: true })
+    .is('scraped_article', null)
+    .eq('is_published', true)
+    .is('wp_dismissed_at', null)
+    .or(needsWpOrFilter(t));
+  if (error) throw error;
+  return count ?? 0;
+}
+
 export interface PostFilter {
   pageId?: string;
   status?: 'PUBLISHED' | 'SCHEDULED';
   from?: string; // ISO — lọc display_time >=
   to?: string; // ISO — lọc display_time <=
   uncommented?: boolean;
+  // Hàng đợi "Cần đăng link WP": bài đã đăng, CHƯA có scraped_article nào, chưa bỏ qua,
+  // và vượt một trong hai ngưỡng tương tác. Xem lib/attention.ts.
+  // dismissedOnly: lật sang xem ĐÚNG những bài đã bỏ qua (để hoàn tác), không phải gộp cả hai.
+  needsWp?: AttentionThresholds & { dismissedOnly?: boolean };
   page?: number;
   pageSize?: number;
 }
@@ -77,9 +120,11 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
   // "Chưa comment" = page CHƯA tự comment bài (page_commented=false — dữ liệu thật từ FB).
   // count: 'exact' GỘP đếm tổng vào cùng 1 request với data — tiết kiệm 1 round-trip Supabase.
   const offset = (page - 1) * pageSize;
+  // Embed scraped_article CHỈ khi cần anti-join — /posts không phải trả giá cho cái join này.
+  const cols = filter.needsWp ? `${POST_COLUMNS}, scraped_article!left(post_id)` : POST_COLUMNS;
   let dataQ = db
     .from('post')
-    .select(POST_COLUMNS, { count: 'exact' })
+    .select(cols, { count: 'exact' })
     .order('display_time', { ascending: false, nullsFirst: false })
     .range(offset, offset + pageSize - 1);
   if (filter.pageId) dataQ = dataQ.eq('page_id', filter.pageId);
@@ -88,11 +133,30 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
   if (filter.from) dataQ = dataQ.gte('display_time', filter.from);
   if (filter.to) dataQ = dataQ.lte('display_time', filter.to);
   if (filter.uncommented) dataQ = dataQ.eq('page_commented', false);
+  if (filter.needsWp) {
+    // ANTI-JOIN: `!left` ép LEFT JOIN rồi .is('<tên embed>', null) = "không có scraped_article nào".
+    // Đây là cách PostgREST diễn đạt NOT EXISTS. KHÔNG dùng .not('id','in',(...)) vì danh sách id
+    // sẽ phình URL và vỡ khi số bài lớn.
+    dataQ = dataQ
+      .is('scraped_article', null)
+      .eq('is_published', true)
+      .or(needsWpOrFilter(filter.needsWp));
+    dataQ = filter.needsWp.dismissedOnly
+      ? dataQ.not('wp_dismissed_at', 'is', null)
+      : dataQ.is('wp_dismissed_at', null);
+  }
 
   const { data: posts, count, error } = await dataQ;
   if (error) throw error;
   const total = count ?? 0;
-  const list = (posts ?? []) as PostRow[];
+  // Bỏ cột embed trước khi cast: nó chỉ dùng để lọc chứ không phải dữ liệu của PostRow, và để
+  // nguyên thì nó sẽ theo props chảy xuống client component.
+  // Qua `unknown` vì `cols` là string động -> parser kiểu của supabase-js không suy được shape.
+  const list = ((posts ?? []) as unknown as Array<PostRow & { scraped_article?: unknown }>).map((row) => {
+    const p = { ...row };
+    delete p.scraped_article;
+    return p as PostRow;
+  });
   if (!list.length) return { rows: [], total, page, pageSize };
 
   // Lịch sử comment (của mình) + bài WP cho các post của trang hiện tại — 2 query độc lập,

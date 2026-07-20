@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { AddCommentForm } from "./add-comment-form";
 import { CollapsibleText } from "./collapsible-text";
 import { DeleteCommentButton } from "./delete-comment-button";
+import { DismissWpButton } from "./dismiss-wp-button";
 import { EditCommentButton } from "./edit-comment-button";
 import { StatusBadge } from "./status-badge";
 import { WordpressPostButton } from "./wordpress-post-button";
@@ -41,7 +42,21 @@ function TypeBadge({ published }: { published: boolean }) {
   );
 }
 
-export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record<string, string> }) {
+export function PostsTable({
+  posts,
+  pageName,
+  showEngagement = false,
+  dismissable = false,
+  emptyMessage = "Không có bài post. Bấm “Đồng bộ tất cả page” để kéo về.",
+}: {
+  posts: Row[];
+  pageName: Record<string, string>;
+  /** Hiện reaction/comment thật — ở /wp-needed đây là LÝ DO bài nổi lên, thiếu thì user mù. */
+  showEngagement?: boolean;
+  /** Hiện nút "Bỏ qua" (chỉ có nghĩa trong hàng đợi /wp-needed). */
+  dismissable?: boolean;
+  emptyMessage?: string;
+}) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   return (
@@ -60,7 +75,7 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
           {posts.length === 0 && (
             <TableRow>
               <TableCell colSpan={5} className="py-10 text-center text-muted-foreground">
-                Không có bài post. Bấm “Đồng bộ tất cả page” để kéo về.
+                {emptyMessage}
               </TableCell>
             </TableRow>
           )}
@@ -107,6 +122,13 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
                   </TableCell>
                   <TableCell>
                     <div className="space-y-1">
+                      {showEngagement && (
+                        // "—" chứ không phải 0 khi reaction_count null: "chưa sync" khác hẳn
+                        // "không ai thả", và chỉ một trong hai là lý do để nghi ngờ dữ liệu.
+                        <div className="text-xs text-muted-foreground tabular-nums">
+                          ❤ {p.reaction_count ?? "—"} · 💬 {p.comment_count ?? 0}
+                        </div>
+                      )}
                       {p.page_commented ? (
                         <Badge className="border-transparent bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300">
                           <Check className="size-3" /> Đã comment
@@ -152,6 +174,7 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
                           texts: p.comments.map((c) => `${c.message ?? ""} ${c.attachment_url ?? ""}`),
                         }}
                       />
+                      {dismissable && <DismissWpButton postDbId={p.id} dismissed={!!p.wp_dismissed_at} />}
                       <Button size="sm" onClick={() => setOpenId(isOpen ? null : p.id)}>
                         {isOpen ? <X /> : <MessageSquarePlus />}
                         {isOpen ? "Đóng" : "Comment"}

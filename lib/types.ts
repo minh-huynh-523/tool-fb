@@ -30,8 +30,10 @@ export interface PostRow {
   scheduled_publish_time: string | null; // chỉ có ở bài đang lên lịch
   display_time: string | null; // coalesce(scheduled_publish_time, fb_created_at) — dùng để sort/lọc
   page_commented: boolean; // page đã tự comment bài này chưa (từ FB thật)
-  comment_count: number | null; // tổng comment của bài
+  comment_count: number | null; // tổng comment của bài — TÍNH CẢ comment của chính page
+  reaction_count: number | null; // tổng reaction; null = chưa sync kể từ migration 0017 (khác hẳn 0)
   page_comment_at: string | null; // thời điểm page comment
+  wp_dismissed_at: string | null; // đã bấm "Bỏ qua" ở /wp-needed (null = vẫn trong hàng đợi)
   raw: unknown;
   synced_at: string;
   created_at: string;

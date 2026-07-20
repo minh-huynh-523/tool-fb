@@ -54,6 +54,9 @@ function toPostRow(pageId: string, item: FbFeedItem, published: boolean) {
     display_time: published ? fbCreatedAt : (scheduledIso ?? fbCreatedAt),
     page_commented: !!pageComment,
     comment_count: commentCount,
+    // ?? null chứ TUYỆT ĐỐI không ?? 0: hàm này cũng chạy cho item từ /scheduled_posts (chuỗi field
+    // riêng, không xin reactions) và cho ca fallback ở getPageFeed. 0 sẽ là nói dối "không ai thả".
+    reaction_count: item.reactions?.summary?.total_count ?? null,
     page_comment_at: pageComment?.created_time ?? null,
     raw: item as unknown,
     synced_at: new Date().toISOString(),
@@ -78,6 +81,9 @@ function toVideoPostRow(pageId: string, v: FbVideoItem) {
     display_time: scheduledIso ?? createdAt,
     page_commented: false,
     comment_count: null,
+    // Bài chưa lên sóng thì không có tương tác. Key vẫn phải CÓ MẶT: Supabase bulk upsert đòi
+    // mọi row trong cùng batch có y hệt bộ key.
+    reaction_count: null,
     page_comment_at: null,
     raw: v as unknown,
     synced_at: new Date().toISOString(),
@@ -101,10 +107,14 @@ export async function syncPage(pageId: string, opts: { limit?: number } = {}): P
   try {
     const token = decryptToken(p.access_token);
 
+    const warnings: string[] = [];
+
     // Bài đã đăng (bắt buộc) + bài lên lịch (fail-mềm nếu token thiếu quyền).
     const feed = await getPageFeed(pageId, token, { limit: opts.limit ?? 25 });
+    if (feed.reactionsIncluded === false) {
+      warnings.push('Graph không trả reactions — "Cần đăng link WP" tạm chỉ dựa vào số comment.');
+    }
     let scheduled: FbFeedItem[] = [];
-    const warnings: string[] = [];
     try {
       const sch = await getScheduledPosts(pageId, token);
       scheduled = sch.data ?? [];

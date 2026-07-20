@@ -3,18 +3,23 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, FileText, LayoutDashboard, Menu, Sparkles, Swords, X } from "lucide-react";
+import { Building2, FileText, LayoutDashboard, Link2, Menu, Sparkles, Swords, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LogoutButton } from "./logout-button";
+import { WpNeededBadge } from "./wp-needed-badge";
+
+const WP_NEEDED_HREF = "/wp-needed";
 
 const NAV = [
   { href: "/posts", label: "Bài post", icon: FileText },
+  // Ngay dưới "Bài post": đây là việc phát sinh TỪ bài post, và là thứ đáng nhìn thứ hai khi mở app.
+  { href: WP_NEEDED_HREF, label: "Cần đăng link WP", icon: Link2 },
   { href: "/pages", label: "Pages", icon: Building2 },
   { href: "/competitors", label: "Đối thủ", icon: Swords },
   { href: "/prompts", label: "Mẫu prompt", icon: Sparkles },
 ];
 
-export function AppSidebar({ username }: { username: string }) {
+export function AppSidebar({ username, wpNeeded = 0 }: { username: string; wpNeeded?: number }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
@@ -46,7 +51,8 @@ export function AppSidebar({ username }: { username: string }) {
             )}
           >
             <Icon className="size-4 shrink-0" />
-            {label}
+            <span className="truncate">{label}</span>
+            {href === WP_NEEDED_HREF && <WpNeededBadge initial={wpNeeded} />}
           </Link>
         ))}
       </nav>

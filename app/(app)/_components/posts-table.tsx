@@ -206,13 +206,15 @@ export function PostsTable({ posts, pageName }: { posts: Row[]; pageName: Record
                                         {formatVN(c.run_after)}
                                       </TableCell>
                                       <TableCell className="align-top">
-                                        <StatusBadge status={c.status} />
+                                        <StatusBadge status={c.status} attempts={c.attempts} />
                                       </TableCell>
                                       <TableCell className="align-top text-xs text-muted-foreground">
                                         {c.status === "SENT" && c.sent_at ? (
                                           `Đã đăng ${formatVN(c.sent_at)}`
                                         ) : c.status === "FAILED" ? (
                                           <span className="text-red-600">{c.error || "Gửi lỗi"}</span>
+                                        ) : c.status === "PENDING" && c.attempts > 0 ? (
+                                          <span className="text-orange-600">{c.error || "Lượt gửi trước hỏng"}</span>
                                         ) : (
                                           "—"
                                         )}

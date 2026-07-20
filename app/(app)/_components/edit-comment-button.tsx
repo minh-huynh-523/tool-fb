@@ -6,6 +6,8 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Loader2, Pencil } from "lucide-react";
 import { isoToVnLocal } from "@/lib/date";
 import { fetchJson } from "@/lib/fetch-json";
+import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
+import { CharCounter } from "./char-counter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +40,7 @@ export function EditCommentButton({
   const [expanded, setExpanded] = useState(false); // bung Textarea để xem hết comment dài
 
   const longMessage = message.length > 200 || message.split("\n").length > 3;
+  const overLimit = message.length > FB_COMMENT_MAX_CHARS;
 
   // Chỉ sửa được khi chưa gửi (PENDING) hoặc gửi lỗi (FAILED -> sửa xong thử lại).
   if (comment.status !== "PENDING" && comment.status !== "FAILED") return null;
@@ -45,6 +48,10 @@ export function EditCommentButton({
   async function save() {
     if (!message.trim() && !attachmentUrl.trim()) {
       toast.error("Cần nội dung hoặc link đính kèm");
+      return;
+    }
+    if (message.length > FB_COMMENT_MAX_CHARS) {
+      toast.error(`Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự — cắt bớt trước khi lưu.`);
       return;
     }
     setLoading(true);
@@ -108,6 +115,7 @@ export function EditCommentButton({
               value={message}
               onChange={(e) => setMessage(e.target.value)}
             />
+            <CharCounter value={message} />
             {longMessage && (
               <Button
                 type="button"
@@ -141,7 +149,7 @@ export function EditCommentButton({
           <Button variant="outline" onClick={() => setOpen(false)} disabled={loading}>
             Huỷ
           </Button>
-          <Button onClick={save} disabled={loading}>
+          <Button onClick={save} disabled={loading || overLimit}>
             {loading ? (
               <>
                 <Loader2 className="animate-spin" /> Đang lưu…

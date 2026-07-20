@@ -33,7 +33,11 @@ export interface ScrapedPage {
   posts: ParsedPost[];
 }
 
-async function collectFeed(context: BrowserContext, handle: string): Promise<ScrapedPage> {
+async function collectFeed(
+  context: BrowserContext,
+  handle: string,
+  opts: { dumpPath?: string } = {},
+): Promise<ScrapedPage> {
   const page = await context.newPage();
 
   // Gom mọi fragment JSON từ response GraphQL (response FB nối nhiều JSON bằng '\n').
@@ -86,6 +90,14 @@ async function collectFeed(context: BrowserContext, handle: string): Promise<Scr
     await page.waitForTimeout(1600);
   }
 
+  // Đổ nguyên fragment ra đĩa để soi schema GraphQL thật (FB đổi field liên tục, không đoán được
+  // link nằm ở đâu nếu chỉ nhìn dữ liệu đã parse). Chỉ dùng khi debug parser.
+  if (opts.dumpPath) {
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(opts.dumpPath, JSON.stringify(fragments, null, 2));
+    console.log(`  ↳ đã đổ ${fragments.length} fragment thô → ${opts.dumpPath}`);
+  }
+
   const { posts, pageName, pageId } = parseFeed(fragments, isNumeric(handle) ? handle : null);
   await page.close();
 
@@ -122,10 +134,13 @@ function recentFirst(posts: ParsedPost[], handle: string): ParsedPost[] {
 }
 
 /** Cào 1 page (tự mở & đóng browser). Dùng cho chạy lẻ. */
-export async function scrapeCompetitorPage(handle: string): Promise<ScrapedPage> {
+export async function scrapeCompetitorPage(
+  handle: string,
+  opts: { dumpPath?: string } = {},
+): Promise<ScrapedPage> {
   const { browser, context } = await launchStealth();
   try {
-    return await collectFeed(context, handle);
+    return await collectFeed(context, handle, opts);
   } finally {
     await browser.close();
   }

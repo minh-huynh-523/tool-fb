@@ -101,7 +101,7 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
   const [{ data: comments }, { data: scraped }] = await Promise.all([
     db
       .from('scheduled_comment')
-      .select('id, post_id, message, attachment_url, run_after, status, sent_at, error, created_at')
+      .select('id, post_id, message, attachment_url, run_after, status, attempts, sent_at, error, created_at')
       .in('post_id', ids)
       .order('run_after', { ascending: true }),
     db.from('scraped_article').select('post_id, wp_post_id, wp_edit_url, wp_status, wp_permalink').in('post_id', ids),
@@ -245,8 +245,8 @@ export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> 
 // Liệt kê cột tường minh để BỎ `prompt_raw` (nguyên văn Gemini, rất dài — chỉ cần khi
 // user bấm "Xem bản gốc", lúc đó lấy từ response POST). Cùng lý do POST_COLUMNS bỏ `raw`.
 const COMPETITOR_POST_COLUMNS = `
-  id, competitor_page_id, fb_post_id, permalink, caption, media_type, media_url,
-  fb_created_at, raw, scraped_at, created_at,
+  id, competitor_page_id, fb_post_id, permalink, caption, caption_link_urls, comment_link_urls,
+  links_scanned_at, media_type, media_url, fb_created_at, raw, scraped_at, created_at,
   story_analysis, prompt_image, prompt_video, prompt_model, prompt_at, prompt_error
 `;
 

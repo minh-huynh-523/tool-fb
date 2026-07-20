@@ -4,7 +4,10 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createWorkerSupabase } from './supabase';
-import { scrapeMany, type ScrapedPage } from './client';
+import { BlockedError, scrapeMany, type ScrapedPage } from './client';
+import { launchStealth } from './browser';
+import { linksFromPostPage, randomDelayMs } from './post-links';
+import { scraperConfig } from './config';
 import type { CompetitorPageRow } from '../types';
 
 const toIso = (unix: number | null) => (unix ? new Date(unix * 1000).toISOString() : null);
@@ -32,6 +35,7 @@ async function persist(db: SupabaseClient, pageRow: CompetitorPageRow, r: Scrape
           fb_post_id: p.fbPostId,
           permalink: p.permalink,
           caption: p.caption,
+          caption_link_urls: p.linkUrls,
           media_type: p.mediaType,
           media_url: p.mediaUrl,
           fb_created_at: toIso(p.createdAt),
@@ -47,14 +51,19 @@ async function persist(db: SupabaseClient, pageRow: CompetitorPageRow, r: Scrape
       const rows = p.comments.map((c) => ({
         competitor_post_id: postRow.id as string,
         fb_comment_id: c.fbCommentId,
+        author_id: c.authorId,
         author_name: c.authorName,
+        is_page_author: c.isPageAuthor,
         message: c.message,
-        link_url: c.linkUrl,
+        // link_url giữ lại = link đầu tiên: UI/export cũ vẫn đọc cột này, đổi một lượt sẽ vỡ
+        // mấy hàng cào từ trước.
+        link_url: c.linkUrls[0] ?? null,
+        link_urls: c.linkUrls,
         commented_at: toIso(c.createdAt),
         scraped_at: new Date().toISOString(),
       }));
       await db.from('competitor_comment').upsert(rows, { onConflict: 'competitor_post_id,fb_comment_id' });
-      commentCount += rows.length;
+      commentCount += rows.filter((r) => r.is_page_author).length;
     }
   }
   return commentCount;
@@ -106,6 +115,86 @@ export async function scrapePages(db: SupabaseClient, pages: CompetitorPageRow[]
   );
 }
 
+/**
+ * Lượt 2: mở permalink từng bài để bóc link "full story" (feed không có link này — xem
+ * post-links.ts). Chỉ đụng bài CẦN quét, có trần mỗi lượt, dừng cả lượt ngay khi bị chặn.
+ *
+ * Bài cần quét = chưa quét bao giờ, HOẶC còn mới (< postLinkRescanHours) mà vẫn chưa ra link —
+ * đối thủ hay thả link vài giờ sau khi đăng. Bài cũ đã quét mà không có link thì bỏ hẳn, nếu
+ * không mỗi lượt sẽ phí sạch trần vào mấy bài không bao giờ có link.
+ */
+export async function scrapePostLinks(db = createWorkerSupabase()): Promise<{ scanned: number; found: number }> {
+  const { postLinkLimit, postLinkRescanHours } = scraperConfig;
+  const rescanCutoff = new Date(Date.now() - postLinkRescanHours * 3600_000).toISOString();
+
+  // Hai query rời rồi gộp thay vì một .or(...) lồng and(): so sánh mảng rỗng trong PostgREST
+  // (comment_link_urls.eq.{}) dùng đúng ký tự {} mà cú pháp .or() cũng dùng để gom nhóm — dễ
+  // parse sai một cách âm thầm. Lọc "chưa có link" bằng JS thì nhìn là biết đúng.
+  type Row = { id: string; permalink: string; links_scanned_at: string | null; comment_link_urls: string[] };
+  const cols = 'id, permalink, fb_created_at, links_scanned_at, comment_link_urls';
+
+  const [fresh, recent] = await Promise.all([
+    // Chưa quét bao giờ.
+    db
+      .from('competitor_post')
+      .select(cols)
+      .not('permalink', 'is', null)
+      .is('links_scanned_at', null)
+      .order('fb_created_at', { ascending: false, nullsFirst: false })
+      .limit(postLinkLimit),
+    // Còn mới: quét lại để bắt link đối thủ thả muộn (lọc "chưa ra link" ở dưới).
+    db
+      .from('competitor_post')
+      .select(cols)
+      .not('permalink', 'is', null)
+      .not('links_scanned_at', 'is', null)
+      .gte('fb_created_at', rescanCutoff)
+      .order('fb_created_at', { ascending: false, nullsFirst: false })
+      .limit(postLinkLimit),
+  ]);
+  if (fresh.error) throw new Error(`Đọc bài chưa quét link lỗi: ${fresh.error.message}`);
+  if (recent.error) throw new Error(`Đọc bài cần quét lại lỗi: ${recent.error.message}`);
+
+  const due = [
+    ...((fresh.data ?? []) as Row[]),
+    ...((recent.data ?? []) as Row[]).filter((r) => !(r.comment_link_urls ?? []).length),
+  ].slice(0, postLinkLimit);
+  if (!due.length) return { scanned: 0, found: 0 };
+
+  console.log(`[link] mở permalink ${due.length} bài (trần ${postLinkLimit})...`);
+  const { browser, context } = await launchStealth();
+  let scanned = 0;
+  let found = 0;
+  try {
+    for (let i = 0; i < due.length; i++) {
+      const p = due[i];
+      try {
+        const links = await linksFromPostPage(context, p.permalink);
+        await db
+          .from('competitor_post')
+          .update({ comment_link_urls: links, links_scanned_at: new Date().toISOString() })
+          .eq('id', p.id);
+        scanned++;
+        if (links.length) found++;
+      } catch (e) {
+        if (e instanceof BlockedError) {
+          // Bị chặn = phiên đang bị soi. Cố thêm chỉ tổ đốt cookie đăng nhập -> dừng cả lượt,
+          // lượt sau (6h nữa) chạy tiếp từ đúng chỗ vì links_scanned_at chưa được set.
+          console.warn(`[link] bị chặn ở bài ${i + 1}/${due.length} — dừng lượt, giữ phiên đăng nhập`);
+          break;
+        }
+        // Lỗi lẻ (timeout 1 bài) thì bỏ qua bài đó, KHÔNG đánh dấu đã quét để lượt sau thử lại.
+        console.error(`[link] lỗi bài ${p.id}: ${(e as Error).message}`);
+      }
+      if (i < due.length - 1) await new Promise((r) => setTimeout(r, randomDelayMs()));
+    }
+  } finally {
+    await browser.close();
+  }
+  console.log(`[link] quét ${scanned} bài, ${found} bài có link`);
+  return { scanned, found };
+}
+
 /** Cào tất cả page active (cron 6h). */
 export async function scrapeAllActive(db = createWorkerSupabase()): Promise<void> {
   const { data, error } = await db.from('competitor_page').select('*').eq('active', true);
@@ -113,6 +202,9 @@ export async function scrapeAllActive(db = createWorkerSupabase()): Promise<void
   const pages = (data ?? []) as CompetitorPageRow[];
   console.log(`[cron] cào ${pages.length} page active...`);
   await scrapePages(db, pages);
+  // Lượt 2 chạy SAU khi feed xong: cần bài đã nằm trong DB mới biết permalink nào phải mở.
+  // Lỗi ở đây không được kéo đổ cả lượt cào — dữ liệu feed đã ghi rồi.
+  await scrapePostLinks(db).catch((e) => console.error('[link] lỗi:', (e as Error).message));
 }
 
 /** Xử lý đơn "Cào ngay" (nút trên Vercel set scrape_requested_at). Poll gọi hàm này. */
@@ -129,6 +221,7 @@ export async function processScrapeRequests(db = createWorkerSupabase()): Promis
   if (due.length) {
     console.log(`[poll] ${due.length} đơn cào on-demand...`);
     await scrapePages(db, due);
+    await scrapePostLinks(db).catch((e) => console.error('[link] lỗi:', (e as Error).message));
   }
   return due.length;
 }

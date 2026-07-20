@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Check, Table2 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { unwrapFbLink } from "@/lib/fb-link";
+import { collectPostLinks } from "@/lib/fb-link";
 import { fetchJson } from "@/lib/fetch-json";
 import { useNow } from "@/lib/use-now";
 import { sheetState } from "@/lib/sheet-state";
@@ -60,11 +60,15 @@ export function ExportSheetButton({
     // Chỉ nội dung, KHÔNG hàng tiêu đề — dán nối tiếp vào sheet có sẵn không bị chen tên cột.
     const tsv = rows
       .map((p) => {
+        // Chỉ comment của page (giống cột "Part 2" trên bảng) — DB giờ lưu cả comment người ngoài.
         const part2 = p.comments
+          .filter((c) => c.is_page_author)
           .map((c) => (c.message ?? "").trim())
           .filter(Boolean)
           .join("\n\n");
-        const link = unwrapFbLink(p.comments.find((c) => c.link_url)?.link_url);
+        // MỌI link, không chỉ cái đầu. Vẫn gói trong 1 ô để giữ đúng 5 cột — thêm cột sẽ lệch
+        // sheet người dùng đang dán vào.
+        const link = collectPostLinks(p).join(" | ");
         return [sourceUrl, p.permalink ?? "", p.caption ?? "", part2, link].map(cell).join("\t");
       })
       .join("\n");

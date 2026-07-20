@@ -5,7 +5,7 @@ import { ExternalLink, Sparkles, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatVN, relativeVN } from "@/lib/date";
 import { useNow } from "@/lib/use-now";
-import { competitorPageUrl, unwrapFbLink } from "@/lib/fb-link";
+import { collectPostLinks, competitorPageUrl } from "@/lib/fb-link";
 import type { CompetitorPostWithComments } from "@/lib/queries";
 import { CollapsibleText } from "./collapsible-text";
 import { CopyButton } from "./copy-button";
@@ -152,13 +152,14 @@ export function CompetitorPostsTable({
           </thead>
           <tbody>
             {posts.map((post) => {
+              // CHỈ comment của page — giờ DB lưu cả comment người ngoài (để không mất link của
+              // họ), nhưng cột này vẫn phải là nội dung "Part 2" do page tự đăng như trước.
               const part2 = post.comments
+                .filter((c) => c.is_page_author)
                 .map((c) => (c.message ?? "").trim())
                 .filter(Boolean)
                 .join("\n\n");
-              // unwrapFbLink cả ở đây (không chỉ lúc cào) để hàng cào TRƯỚC khi có bóc link
-              // vẫn hiện URL thật thay vì lớp bọc l.facebook.com — khỏi phải backfill DB.
-              const link = unwrapFbLink(post.comments.find((c) => c.link_url)?.link_url);
+              const links = collectPostLinks(post);
 
               return (
                 <tr key={post.id} className="border-t border-neutral-200 align-top dark:border-neutral-800">
@@ -236,10 +237,19 @@ export function CompetitorPostsTable({
                     )}
                   </td>
 
-                  {/* Link Comment Post: link bài đầy đủ page đối thủ để trong comment */}
+                  {/* Link Comment Post: MỌI link bóc được (caption + mọi comment), không chỉ cái đầu */}
                   <td className="px-4 py-3">
-                    {link ? (
-                      <LinkCell href={link} label={link} />
+                    {links.length ? (
+                      <div className="space-y-1">
+                        {links.map((l) => (
+                          <LinkCell key={l} href={l} label={l} />
+                        ))}
+                        {links.length > 1 && (
+                          <div className="flex justify-end">
+                            <CopyButton text={links.join("\n")} label={`Copy ${links.length} link`} />
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-neutral-400">—</span>
                     )}

@@ -8,13 +8,27 @@ const MAP: Record<CommentStatus, { label: string; cls: string }> = {
   FAILED: { label: "Lỗi", cls: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
 };
 
-export function StatusBadge({ status }: { status: CommentStatus | null }) {
+// Cùng màu cam như PENDING sẽ khiến "đang chờ thử lại" trông y hệt "chờ lần đầu" — dùng cam đậm
+// hơn để lướt bảng vẫn nhận ra ngay là comment này đã hỏng ít nhất một lần.
+const RETRY_CLS = "bg-orange-200 text-orange-900 dark:bg-orange-950 dark:text-orange-200";
+
+export function StatusBadge({
+  status,
+  attempts = 0,
+}: {
+  status: CommentStatus | null;
+  attempts?: number | null;
+}) {
   if (!status) {
     return (
       <Badge variant="secondary" className="text-muted-foreground">
         Chưa comment
       </Badge>
     );
+  }
+  // PENDING + đã từng gửi hỏng = worker đang đợi hết backoff để bắn lại.
+  if (status === "PENDING" && (attempts ?? 0) > 0) {
+    return <Badge className={`border-transparent ${RETRY_CLS}`}>Chờ thử lại (lần {(attempts ?? 0) + 1})</Badge>;
   }
   const s = MAP[status];
   return <Badge className={`border-transparent ${s.cls}`}>{s.label}</Badge>;

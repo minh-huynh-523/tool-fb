@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { drainOne } from "@/lib/comments";
+import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
 import { vnLocalToISO } from "@/lib/date";
 import type { PostRow, ScheduledCommentRow } from "@/lib/types";
 
@@ -37,6 +38,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
   const runAtISO = (body.runAtISO ?? "").trim(); // ISO timestamptz — copy chính xác run_after của comment khác
   if (!message && !attachmentUrl) {
     return NextResponse.json({ error: "Cần nhập nội dung hoặc link đính kèm" }, { status: 400 });
+  }
+  // Chặn ở server là lớp bảo vệ CHÍNH (bộ đếm ở form chỉ là tiện lợi): quá trần thì FB nhận
+  // rồi mới từ chối lúc gửi — người dùng chỉ thấy dòng đỏ nhiều giờ sau.
+  if (message.length > FB_COMMENT_MAX_CHARS) {
+    return NextResponse.json(
+      {
+        error: `Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự (hiện tại: ${message.length.toLocaleString("vi-VN")}) — Facebook sẽ từ chối.`,
+      },
+      { status: 400 },
+    );
   }
 
   const db = createSupabaseAdmin();

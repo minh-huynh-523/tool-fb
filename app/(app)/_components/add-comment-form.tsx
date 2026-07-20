@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
+import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
+import { CharCounter } from "./char-counter";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -25,10 +27,16 @@ export function AddCommentForm({
   const [runAt, setRunAt] = useState(""); // "" = đăng ngay
   const [loading, setLoading] = useState(false);
 
+  const overLimit = message.length > FB_COMMENT_MAX_CHARS;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!message.trim() && !attachmentUrl.trim()) {
       toast.error("Cần nội dung hoặc link đính kèm");
+      return;
+    }
+    if (overLimit) {
+      toast.error(`Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự — cắt bớt trước khi gửi.`);
       return;
     }
     setLoading(true);
@@ -68,6 +76,7 @@ export function AddCommentForm({
           onChange={(e) => setMessage(e.target.value)}
           rows={3}
         />
+        <CharCounter value={message} />
       </div>
       <div className="space-y-1.5">
         <Label>Link đính kèm (tuỳ chọn)</Label>
@@ -82,7 +91,7 @@ export function AddCommentForm({
         <DateTimePicker value={runAt} onChange={setRunAt} />
       </div>
       <div className="flex items-center gap-2">
-        <Button type="submit" disabled={loading}>
+        <Button type="submit" disabled={loading || overLimit}>
           {loading ? "Đang lưu…" : runAt ? "Hẹn giờ đăng" : "Gửi comment"}
         </Button>
         {compact && onClose && (

@@ -5,23 +5,32 @@
  * nằm ở các fragment KHÁC nhau, nối với nhau qua post_id. Comment `id` giải base64 ra
  * "comment:<postId>_<commentFbid>" → lấy được postId để gắn comment về đúng post.
  *
- * Chỉ giữ comment của CHÍNH page: lọc author.id === pageId (fallback author.name === pageName).
+ * Giữ MỌI comment, đánh dấu isPageAuthor = (author.id === pageId, fallback author.name === pageName)
+ * để UI lọc ra "Part 2" của page — trước đây lọc ngay ở đây nên link do admin thả từ profile cá
+ * nhân bị vứt luôn.
+ *
+ * LƯU Ý về link: feed KHÔNG chứa link "full story" của đối thủ. Đã kiểm chứng bằng cách dump
+ * fragment thô 2 lượt — không có comment node nào mang link, cũng không có `ranges`. Link chỉ hiện
+ * khi mở PERMALINK từng bài (xem post-links.ts). Phần bóc link ở đây vẫn cần cho link dạng chữ
+ * thường nằm sẵn trong caption/comment, nhưng đừng trông đợi nó bắt được link "blue text".
  */
-import { unwrapFbLink } from '../fb-link';
+import { contentLinksInText } from '../fb-link';
 
 export interface ParsedComment {
   fbCommentId: string | null;
   authorId: string | null;
   authorName: string | null;
+  isPageAuthor: boolean; // comment do CHÍNH page đăng (cột "Part 2") hay của người ngoài
   message: string;
   createdAt: number | null; // unix giây
-  linkUrl: string | null;
+  linkUrls: string[];
 }
 
 export interface ParsedPost {
   fbPostId: string;
   permalink: string | null;
   caption: string;
+  linkUrls: string[]; // link bóc từ caption + attachment của chính bài
   mediaType: string | null;
   mediaUrl: string | null;
   createdAt: number | null; // unix giây (best-effort)
@@ -49,11 +58,60 @@ function decodeCommentId(id: string): { postId: string; commentFbid: string } | 
   }
 }
 
-// URL đầu tiên trong text (first-comment kiểu "Full story: https://…").
-// FB bọc link ngoài qua l.facebook.com/l.php?u=… → bóc ra URL thật rồi mới lưu.
-function extractLink(text: string): string | null {
-  const m = text.match(/https?:\/\/[^\s)]+/i);
-  return m ? unwrapFbLink(m[0]) : null;
+/**
+ * Key mang URL CẤU HÌNH của FB chứ không phải nội dung page.
+ *
+ * Payload GraphQL có sẵn `block_list_url` / `block_list_url_prefix` — danh sách domain FB tự chặn,
+ * và nó chứa đúng mấy shortener mà page đối thủ hay dùng (tinyurl, short.gy…). Không loại thì mọi
+ * bài sẽ dính chung một đống link rác giống hệt nhau. (Đã gặp thật khi soi dump raw.)
+ */
+const CONFIG_URL_KEY = /block_list|blocklist|_prefix$|whitelist|allow_list/i;
+
+/**
+ * Gom link trong cả cây con của 1 node, KHÔNG phụ thuộc tên field.
+ *
+ * FB đổi schema liên tục và link hiển thị dạng "blue text" (chữ hiện ≠ URL) nằm ở nhánh entity/
+ * attachment tuỳ biến thể — hard-code đường dẫn sẽ hỏng lần đổi tiếp theo. Duyệt sâu rồi lọc theo
+ * host giữ đúng tinh thần parser hiện có: best-effort qua nhiều biến thể schema.
+ */
+function linksInNode(node: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const visit = (o: unknown, key: string) => {
+    if (CONFIG_URL_KEY.test(key)) return; // nhánh cấu hình FB — không phải nội dung
+    if (typeof o === 'string') {
+      if (!o.includes('http')) return;
+      for (const u of contentLinksInText(o)) {
+        if (!seen.has(u)) {
+          seen.add(u);
+          out.push(u);
+        }
+      }
+      return;
+    }
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) {
+      for (const it of o) visit(it, key); // giữ key của mảng để filter cấu hình vẫn ăn
+      return;
+    }
+    for (const k in o as Record<string, unknown>) visit((o as Record<string, unknown>)[k], k);
+  };
+  visit(node, '');
+  return out;
+}
+
+// Gộp nhiều nguồn link, bỏ trùng, giữ thứ tự gặp.
+function mergeLinks(...groups: string[][]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const g of groups) {
+    for (const u of g) {
+      if (seen.has(u)) continue;
+      seen.add(u);
+      out.push(u);
+    }
+  }
+  return out;
 }
 
 function str(v: unknown): string | null {
@@ -162,6 +220,9 @@ export function parseFeed(fragments: unknown[], pageIdHint?: string | null): Par
           fbPostId: postId,
           permalink,
           caption,
+          // Caption trước đây KHÔNG hề được bóc link. Lấy cả link plaintext trong text lẫn link
+          // ẩn trong message/attachments (link-card "Full story" là dạng phổ biến nhất).
+          linkUrls: mergeLinks(contentLinksInText(caption), linksInNode(message), linksInNode(node.attachments)),
           mediaType: type,
           mediaUrl: url,
           createdAt: extractCreatedAt(node),
@@ -170,10 +231,12 @@ export function parseFeed(fragments: unknown[], pageIdHint?: string | null): Par
       }
 
       // ---- COMMENT node ----
+      // KHÔNG đòi body.text khác rỗng nữa: comment CHỈ có link (không chữ) trước đây bị loại
+      // sạch — mà đó đúng là kiểu comment mang link cần lấy.
       const body = node.body as Record<string, unknown> | undefined;
       const author = node.author as Record<string, unknown> | undefined;
       const id = str(node.id);
-      if (body && typeof body === 'object' && str(body.text) && author && typeof author === 'object' && id) {
+      if (body && typeof body === 'object' && author && typeof author === 'object' && id) {
         const decoded = decodeCommentId(id);
         if (!decoded) return;
         const text = str(body.text) ?? '';
@@ -181,9 +244,10 @@ export function parseFeed(fragments: unknown[], pageIdHint?: string | null): Par
           fbCommentId: decoded.commentFbid,
           authorId: str(author.id),
           authorName: str(author.name),
+          isPageAuthor: false, // chốt lại ở vòng gắn comment bên dưới (lúc đó mới biết pageId)
           message: text,
           createdAt: typeof node.created_time === 'number' ? node.created_time : null,
-          linkUrl: extractLink(text),
+          linkUrls: mergeLinks(contentLinksInText(text), linksInNode(body), linksInNode(node.attachments)),
         };
         const arr = commentsByPost.get(decoded.postId) ?? [];
         // tránh trùng comment
@@ -193,15 +257,18 @@ export function parseFeed(fragments: unknown[], pageIdHint?: string | null): Par
     });
   }
 
-  // Gắn comment CỦA CHÍNH PAGE về post.
+  // Gắn comment về post.
+  //
+  // Trước đây LỌC BỎ luôn comment của người ngoài. Nhưng link "full story" nhiều khi được thả từ
+  // profile cá nhân của admin chứ không phải danh tính page — lọc sớm là vứt luôn cả link. Giờ giữ
+  // hết, chỉ ĐÁNH DẤU isPageAuthor để cột "Part 2" (vốn chỉ hiện comment của page) vẫn như cũ.
   const pageId = pageIdHint ?? detectedPageId;
+  const isPage = (c: ParsedComment) =>
+    pageId ? c.authorId === pageId : pageName ? c.authorName === pageName : true;
   for (const [postId, post] of posts) {
     // Node caption thường không mang giờ → lấy từ bảng gom riêng.
     post.createdAt ??= timeByPost.get(postId) ?? null;
-    const all = commentsByPost.get(postId) ?? [];
-    post.comments = all.filter((c) =>
-      pageId ? c.authorId === pageId : pageName ? c.authorName === pageName : true,
-    );
+    post.comments = (commentsByPost.get(postId) ?? []).map((c) => ({ ...c, isPageAuthor: isPage(c) }));
   }
 
   return { posts: [...posts.values()], pageName, pageId };

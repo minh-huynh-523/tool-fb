@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { drainOne } from "@/lib/comments";
+import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
 import { vnLocalToISO } from "@/lib/date";
 import type { ScheduledCommentRow } from "@/lib/types";
 
@@ -145,12 +146,23 @@ export async function PATCH(
   if (!finalMessage && !finalAttachment) {
     return NextResponse.json({ error: "Cần nội dung hoặc link đính kèm" }, { status: 400 });
   }
+  if (finalMessage.length > FB_COMMENT_MAX_CHARS) {
+    return NextResponse.json(
+      {
+        error: `Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự (hiện tại: ${finalMessage.length.toLocaleString("vi-VN")}) — Facebook sẽ từ chối.`,
+      },
+      { status: 400 },
+    );
+  }
 
   // FAILED -> cho chạy lại với lịch mới (chỉ khi có thay đổi thật — check rỗng đã nằm phía trên).
+  // attempts về 0: đây là lần thử lại DO NGƯỜI dùng bấm, phải được cấp lại đủ lượt retry tự động.
+  // Không reset thì comment đã cháy hết 3 lượt sẽ FAILED ngay lần lỗi đầu tiên.
   if (row.status === "FAILED") {
     update.status = "PENDING";
     update.error = null;
     update.claimed_at = null;
+    update.attempts = 0;
   }
 
   const { data: updated, error: upErr } = await db

@@ -148,7 +148,7 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
                 <Card key={c.id}>
                   <CardContent className="space-y-1 text-sm">
                     <div className="flex items-center justify-between gap-2">
-                      <StatusBadge status={c.status} />
+                      <StatusBadge status={c.status} attempts={c.attempts} />
                       <div className="flex items-center gap-1">
                         <span className="text-xs text-muted-foreground">{formatVN(c.created_at)}</span>
                         <EditCommentButton
@@ -183,7 +183,13 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
                         {c.attachment_url}
                       </a>
                     )}
-                    {c.status === "FAILED" && c.error && <p className="text-xs text-red-600">{c.error}</p>}
+                    {/* Hiện cả khi đang chờ thử lại: người dùng cần biết vì sao lượt vừa rồi hỏng,
+                        chứ không phải đợi tới lúc cháy hết lượt mới thấy lý do. */}
+                    {c.error && (c.status === "FAILED" || c.status === "PENDING") && (
+                      <p className={`text-xs ${c.status === "FAILED" ? "text-red-600" : "text-orange-600"}`}>
+                        {c.error}
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               );

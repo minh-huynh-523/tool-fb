@@ -5,18 +5,53 @@ import { decryptToken } from './crypto';
 import { createPostComment, FacebookError } from './facebook/client';
 import type { ScheduledCommentRow } from './types';
 
+// Giữ fbtrace_id: đây là thứ DUY NHẤT Meta hỏi tới khi mở ticket cho mấy lỗi "unknown error",
+// mà lỗi đó chiếm phần lớn ca fail ở đây — vứt đi là mất luôn đường tra.
 function fmtError(e: unknown): string {
   if (e instanceof FacebookError) {
     const code = e.code !== undefined ? `${e.code}${e.subcode ? '/' + e.subcode : ''}` : '';
-    return `[FB ${code}] ${e.message}`;
+    const trace = e.fbtraceId ? ` (trace ${e.fbtraceId})` : '';
+    return `[FB ${code}] ${e.message}${trace}`;
   }
   return (e as Error).message ?? 'Lỗi không xác định';
+}
+
+/**
+ * Lỗi FB đáng thử lại.
+ *
+ * Danh sách CỐ Ý là whitelist ngắn: chỉ retry cái biết chắc tạm thời. Đoán sai theo chiều ngược
+ * lại đắt hơn nhiều — phân loại nhầm 190 (token chết) thành retryable thì mỗi lượt cron sẽ đập
+ * token hỏng vào FB thêm 3 lần, trên mọi page, mỗi phút.
+ *
+ *   1   unknown error   — catch-all; chiếm 10/10 ca fail thực tế của dự án này
+ *   2   service tạm lỗi
+ *   4   rate limit mức app
+ *   17  rate limit mức user
+ *   341 app đạt trần call
+ *
+ * KHÔNG retry: 100 (tham số sai — gồm cả vượt độ dài), 190 (token), 200/10 (thiếu quyền),
+ * 1404006 (post tắt comment). Lỗi không phải FacebookError (DB, decrypt token, page thiếu
+ * trong bảng) cũng không retry: đó là sai cấu hình, thử lại chỉ tốn call.
+ */
+const RETRYABLE_CODES = new Set([1, 2, 4, 17, 341]);
+const MAX_ATTEMPTS = 3;
+// 5ph → 15ph. Lượt thứ 3 hết backoff nên FAILED luôn.
+const BACKOFF_MS = [5 * 60_000, 15 * 60_000];
+
+function isRetryable(e: unknown): boolean {
+  if (!(e instanceof FacebookError)) return false;
+  if (e.code === undefined) return true; // lỗi mạng: FacebookError ném ra không kèm code
+  if (e.status !== undefined && e.status >= 500) return true;
+  return RETRYABLE_CODES.has(e.code);
 }
 
 // Gọi FB đăng comment cho 1 row đã được claim (status=PROCESSING) rồi cập nhật SENT/FAILED.
 // Target được RESOLVE TẠI THỜI ĐIỂM GỬI từ bảng post (post_id uuid ổn định) — vì reel lên lịch
 // Business Suite đổi fb_post_id khi publish; giá trị denormalize trên row có thể đã chết.
-async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promise<'SENT' | 'FAILED' | 'SKIPPED'> {
+async function sendComment(
+  db: SupabaseClient,
+  row: ScheduledCommentRow,
+): Promise<'SENT' | 'FAILED' | 'SKIPPED' | 'RETRY'> {
   try {
     const { data: postRow } = await db
       .from('post')
@@ -58,12 +93,33 @@ async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promis
       .eq('status', 'PROCESSING');
     return 'SENT';
   } catch (e) {
+    // attempts đếm SỐ LẦN ĐÃ GỬI, tăng đúng 1 cho mỗi lần chạy sendComment. row.attempts luôn là
+    // giá trị vừa đọc từ DB (claimPending/reclaimProcessing đều .select() sau update), nên đường
+    // reclaim một row PROCESSING treo cũng không cộng trùng.
+    const attempts = (row.attempts ?? 0) + 1;
+    const backoff = BACKOFF_MS[attempts - 1];
+    const retry = isRetryable(e) && attempts < MAX_ATTEMPTS && backoff !== undefined;
+
+    // Guard status=PROCESSING giữ nguyên như đường SENT: worker chậm bị stale-reclaim đè
+    // không được ghi đè kết quả mới hơn.
     await db
       .from('scheduled_comment')
-      .update({ status: 'FAILED', error: fmtError(e), attempts: (row.attempts ?? 0) + 1 })
+      .update(
+        retry
+          ? {
+              // Về lại hàng đợi, hẹn giờ sau. processDueComments vốn quét PENDING theo run_after
+              // nên tự nhặt lại — không cần đường code riêng cho retry.
+              status: 'PENDING',
+              claimed_at: null,
+              run_after: new Date(Date.now() + backoff).toISOString(),
+              error: fmtError(e), // vẫn ghi để thấy lần thử gần nhất hỏng vì gì
+              attempts,
+            }
+          : { status: 'FAILED', error: fmtError(e), attempts },
+      )
       .eq('id', row.id)
       .eq('status', 'PROCESSING');
-    return 'FAILED';
+    return retry ? 'RETRY' : 'FAILED';
   }
 }
 
@@ -101,7 +157,9 @@ async function reclaimProcessing(
 }
 
 // Rút MỘT job cụ thể khỏi hàng đợi (dùng cho drain ngay sau enqueue): chỉ gửi nếu đã tới hạn.
-export async function drainOne(commentId: string): Promise<'SENT' | 'FAILED' | 'SKIPPED' | 'NOT_DUE'> {
+export async function drainOne(
+  commentId: string,
+): Promise<'SENT' | 'FAILED' | 'SKIPPED' | 'NOT_DUE' | 'RETRY'> {
   const db = createSupabaseAdmin();
   const { data: row } = await db
     .from('scheduled_comment')
@@ -119,7 +177,7 @@ export async function drainOne(commentId: string): Promise<'SENT' | 'FAILED' | '
 // WORKER rút hàng đợi (cron / after): quét PENDING đã tới hạn (run_after<=now) + PROCESSING treo.
 export async function processDueComments(
   opts: { pendingBufferMs?: number; staleMs?: number; limit?: number } = {},
-): Promise<{ sent: number; failed: number; skipped: number; scanned: number }> {
+): Promise<{ sent: number; failed: number; retried: number; skipped: number; scanned: number }> {
   const db = createSupabaseAdmin();
   const now = Date.now();
   const pendingCutoff = new Date(now - (opts.pendingBufferMs ?? 0)).toISOString();
@@ -131,7 +189,13 @@ export async function processDueComments(
     db.from('scheduled_comment').select('*').eq('status', 'PROCESSING').lte('claimed_at', staleCutoff).limit(limit),
   ]);
 
-  const res = { sent: 0, failed: 0, skipped: 0, scanned: (pend?.length ?? 0) + (stale?.length ?? 0) };
+  const res = { sent: 0, failed: 0, retried: 0, skipped: 0, scanned: (pend?.length ?? 0) + (stale?.length ?? 0) };
+  const tally = (r: 'SENT' | 'FAILED' | 'SKIPPED' | 'RETRY') => {
+    if (r === 'SENT') res.sent++;
+    else if (r === 'FAILED') res.failed++;
+    else if (r === 'RETRY') res.retried++;
+    else res.skipped++;
+  };
 
   for (const row of (pend ?? []) as ScheduledCommentRow[]) {
     const claimed = await claimPending(db, row.id);
@@ -139,10 +203,7 @@ export async function processDueComments(
       res.skipped++;
       continue;
     }
-    const r = await sendComment(db, claimed);
-    if (r === 'SENT') res.sent++;
-    else if (r === 'FAILED') res.failed++;
-    else res.skipped++;
+    tally(await sendComment(db, claimed));
   }
   for (const row of (stale ?? []) as ScheduledCommentRow[]) {
     const claimed = await reclaimProcessing(db, row.id, staleCutoff);
@@ -150,10 +211,7 @@ export async function processDueComments(
       res.skipped++;
       continue;
     }
-    const r = await sendComment(db, claimed);
-    if (r === 'SENT') res.sent++;
-    else if (r === 'FAILED') res.failed++;
-    else res.skipped++;
+    tally(await sendComment(db, claimed));
   }
   return res;
 }

@@ -68,9 +68,19 @@ export interface ScheduledCommentRow {
 }
 
 // Subset của scheduled_comment để hiển thị nhanh lịch sử "comment của mình" trong bảng post.
+// attempts có mặt để badge phân biệt "chờ lần đầu" với "đang chờ thử lại sau lỗi".
 export type CommentHistoryRow = Pick<
   ScheduledCommentRow,
-  'id' | 'post_id' | 'message' | 'attachment_url' | 'run_after' | 'status' | 'sent_at' | 'error' | 'created_at'
+  | 'id'
+  | 'post_id'
+  | 'message'
+  | 'attachment_url'
+  | 'run_after'
+  | 'status'
+  | 'attempts'
+  | 'sent_at'
+  | 'error'
+  | 'created_at'
 >;
 
 // =========================================================
@@ -100,6 +110,9 @@ export interface CompetitorPostRow {
   fb_post_id: string;
   permalink: string | null;
   caption: string | null;
+  caption_link_urls: string[]; // link bóc từ caption + attachment của bài (parse feed)
+  comment_link_urls: string[]; // link bóc bằng cách mở permalink bài (nguồn chính của "full story")
+  links_scanned_at: string | null; // null = chưa mở permalink bài này lần nào
   media_type: string | null;
   media_url: string | null;
   fb_created_at: string | null;
@@ -130,9 +143,12 @@ export interface CompetitorCommentRow {
   id: string;
   competitor_post_id: string;
   fb_comment_id: string | null;
-  author_name: string | null; // đã lọc author == tên page
+  author_id: string | null;
+  author_name: string | null;
+  is_page_author: boolean; // comment của CHÍNH page (cột "Part 2") hay của người ngoài
   message: string | null;
-  link_url: string | null; // URL tách từ message/attachment
+  link_url: string | null; // = link_urls[0]; giữ cho UI/export cũ, dùng link_urls cho code mới
+  link_urls: string[]; // MỌI URL bóc được từ text + entity/attachment của comment
   commented_at: string | null;
   scraped_at: string;
 }

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listCompetitorPages } from "@/lib/queries";
+import { listCompetitorPages, RECENT_WINDOW_HOURS } from "@/lib/queries";
 import { sheetState } from "@/lib/sheet-state";
 import { formatVN, nowMs } from "@/lib/date";
 import { AddCompetitorForm } from "../_components/add-competitor-form";
@@ -130,6 +130,9 @@ export default async function CompetitorsPage({ searchParams }: { searchParams: 
               <th className="px-4 py-2 font-medium">Page</th>
               <th className="px-4 py-2 font-medium">Loại</th>
               <th className="px-4 py-2 font-medium">Bài đã cào</th>
+              <th className="px-4 py-2 font-medium" title={`Bài đăng trong ${RECENT_WINDOW_HOURS} giờ gần nhất`}>
+                Bài ≤ {RECENT_WINDOW_HOURS}h
+              </th>
               <th className="px-4 py-2 font-medium">Cào lần cuối</th>
               <th className="px-4 py-2 font-medium">Trạng thái</th>
               <th className="px-4 py-2 font-medium">Sheet</th>
@@ -139,7 +142,7 @@ export default async function CompetitorsPage({ searchParams }: { searchParams: 
           <tbody>
             {pages.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-neutral-400">
+                <td colSpan={8} className="px-4 py-8 text-center text-neutral-400">
                   {all.length === 0
                     ? "Chưa có page đối thủ. Thêm ở form phía trên."
                     : "Không page nào khớp bộ lọc."}
@@ -168,6 +171,17 @@ export default async function CompetitorsPage({ searchParams }: { searchParams: 
                   )}
                 </td>
                 <td className="px-4 py-3 text-neutral-600 dark:text-neutral-300">{p.post_count}</td>
+                <td className="px-4 py-3">
+                  {p.recent_post_count > 0 ? (
+                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 tabular-nums dark:bg-blue-950 dark:text-blue-300">
+                      {p.recent_post_count}
+                    </span>
+                  ) : (
+                    // 0 để mờ chứ không ẩn: "cào rồi mà 6h qua page này không đăng gì" là thông tin,
+                    // ô trống thì lại giống lỗi hiển thị.
+                    <span className="text-xs text-neutral-400">0</span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-neutral-500">
                   {p.last_scraped_at ? formatVN(p.last_scraped_at) : <span className="text-neutral-400">chưa cào</span>}
                 </td>

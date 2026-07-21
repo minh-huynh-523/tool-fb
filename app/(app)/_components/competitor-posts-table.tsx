@@ -85,7 +85,14 @@ export function CompetitorPostsTable({
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <ExportSheetButton posts={posts} sourceUrl={sourceUrl} pageId={pageId} sheetCopiedAt={sheetCopiedAt} lastScrapedAt={lastScrapedAt} />
+        <ExportSheetButton
+          posts={posts}
+          sourceUrl={sourceUrl}
+          pageId={pageId}
+          sheetCopiedAt={sheetCopiedAt}
+          lastScrapedAt={lastScrapedAt}
+          selectedIds={selected}
+        />
       </div>
 
       {selected.size > 0 && (

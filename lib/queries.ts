@@ -275,7 +275,16 @@ export async function getLivePostComments(
 export interface CompetitorPageWithCount extends CompetitorPageRow {
   post_count: number;
   newest_post_at: string | null; // giờ đăng của bài mới nhất — để so với sheet_copied_at
+  recent_post_count: number; // số bài đăng trong RECENT_WINDOW_HOURS giờ gần nhất
 }
+
+/**
+ * Cửa sổ "bài mới" của trang đối thủ. Khớp với FB_SCRAPE_MAX_AGE_HOURS (mặc định 6) — worker chỉ
+ * GIỮ bài trong ngần đó giờ, nên cột này trả lời đúng câu "lượt cào vừa rồi có moi được gì không".
+ * Hằng ở đây chứ không đọc env: env đó là của worker chạy ở laptop, web trên Vercel không có nó,
+ * đọc vào sẽ ra undefined và cửa sổ tụt về 0.
+ */
+export const RECENT_WINDOW_HOURS = 6;
 
 // sheetState()/SheetState nằm ở lib/sheet-state.ts — client component cũng cần dùng, mà
 // import từ file này sẽ kéo theo 'server-only'.
@@ -284,9 +293,15 @@ export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> 
   const db = createSupabaseAdmin();
   // newest_post: embed thứ 2 của cùng bảng, sort giảm dần + limit 1 = bài mới nhất.
   // Rẻ hơn nhiều so với kéo hết post về rồi tự tìm max.
+  //
+  // recent_post: embed thứ 3, count có filter thời gian. Đã verify trên 25 page thật rằng filter
+  // .gte('recent.fb_created_at', …) CÓ áp vào count (không phải tổng số bài), và KHÔNG lọc mất
+  // page cha — page 0 bài mới vẫn về đủ với count 0.
+  const cutoff = new Date(Date.now() - RECENT_WINDOW_HOURS * 3600_000).toISOString();
   const { data, error } = await db
     .from('competitor_page')
-    .select('*, competitor_post(count), newest_post:competitor_post(fb_created_at)')
+    .select('*, competitor_post(count), newest_post:competitor_post(fb_created_at), recent_post:competitor_post(count)')
+    .gte('recent_post.fb_created_at', cutoff)
     .order('fb_created_at', { referencedTable: 'newest_post', ascending: false, nullsFirst: false })
     .limit(1, { referencedTable: 'newest_post' })
     .order('active', { ascending: false })
@@ -294,14 +309,16 @@ export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> 
   if (error) throw error;
   // Supabase trả competitor_post: [{ count }] -> phẳng thành post_count.
   return (data ?? []).map((r) => {
-    const { competitor_post, newest_post, ...rest } = r as CompetitorPageRow & {
+    const { competitor_post, newest_post, recent_post, ...rest } = r as CompetitorPageRow & {
       competitor_post?: Array<{ count: number }>;
       newest_post?: Array<{ fb_created_at: string | null }>;
+      recent_post?: Array<{ count: number }>;
     };
     return {
       ...rest,
       post_count: competitor_post?.[0]?.count ?? 0,
       newest_post_at: newest_post?.[0]?.fb_created_at ?? null,
+      recent_post_count: recent_post?.[0]?.count ?? 0,
     } as CompetitorPageWithCount;
   });
 }

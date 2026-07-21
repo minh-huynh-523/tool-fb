@@ -121,6 +121,9 @@ export interface CompetitorPostRow {
   raw: unknown;
   scraped_at: string;
   created_at: string;
+  // Lần bài này được đưa vào bảng copy cho Sheet gần nhất (0018). NULL = chưa copy bao giờ.
+  // Khác competitor_page.sheet_copied_at: cột kia là nhịp copy cả page trong ngày.
+  sheet_copied_at: string | null;
   // Output Gemini đã tách sẵn (0009). Null = chưa bấm "Tạo prompt".
   story_analysis: string | null; // mục ### STORY ANALYSIS — tham khảo
   prompt_image: string | null; // mục ### IMAGE PROMPT

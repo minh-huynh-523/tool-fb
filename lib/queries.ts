@@ -328,6 +328,7 @@ export async function listCompetitorPages(): Promise<CompetitorPageWithCount[]> 
 const COMPETITOR_POST_COLUMNS = `
   id, competitor_page_id, fb_post_id, permalink, caption, caption_link_urls, comment_link_urls,
   links_scanned_at, media_type, media_url, fb_created_at, raw, scraped_at, created_at,
+  sheet_copied_at,
   story_analysis, prompt_image, prompt_video, prompt_model, prompt_at, prompt_error
 `;
 

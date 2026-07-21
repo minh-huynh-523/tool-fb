@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ExternalLink, Sparkles, Square } from "lucide-react";
+import { Check, ExternalLink, Sparkles, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatVN, relativeVN } from "@/lib/date";
 import { useNow } from "@/lib/use-now";
@@ -149,6 +149,7 @@ export function CompetitorPostsTable({
                 />
               </th>
               <th className="w-32 px-4 py-2 font-medium">Đăng lúc</th>
+              <th className="w-28 px-4 py-2 font-medium">Sheet</th>
               <th className="w-24 px-4 py-2 font-medium">Link Source</th>
               <th className="w-28 px-4 py-2 font-medium">Link Post</th>
               <th className="w-[24%] px-4 py-2 font-medium">Caption FB</th>
@@ -192,6 +193,23 @@ export function CompetitorPostsTable({
                     ) : (
                       <span className="text-xs text-neutral-400" title="FB không trả giờ đăng cho bài này">
                         không rõ giờ
+                      </span>
+                    )}
+                  </td>
+
+                  {/* Đã đưa bài này vào bảng copy chưa — bài "đã copy" bị loại khỏi lần copy mặc
+                      định sau, nên phải nhìn thấy được thì mới tin được cái nút. */}
+                  <td className="px-4 py-3">
+                    {post.sheet_copied_at ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-300"
+                        title={`Đã copy sang Sheet ${formatVN(post.sheet_copied_at)}`}
+                      >
+                        <Check className="size-3" /> đã copy
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+                        chưa copy
                       </span>
                     )}
                   </td>

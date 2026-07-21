@@ -8,6 +8,7 @@ import { collectPostLinks } from "@/lib/fb-link";
 import { fetchJson } from "@/lib/fetch-json";
 import { useNow } from "@/lib/use-now";
 import { sheetState } from "@/lib/sheet-state";
+import { pickSheetRows } from "@/lib/sheet-rows";
 import type { CompetitorPostWithComments } from "@/lib/queries";
 import { SheetStateBadge } from "./sheet-state-badge";
 
@@ -54,17 +55,10 @@ export function ExportSheetButton({
   // Có tick dòng nào không? Quyết định luôn cả tập bài lẫn nhãn nút.
   const bySelection = selectedIds.size > 0;
 
-  const rows = useMemo(() => {
-    // Chọn tay thì lấy ĐÚNG mấy bài đó, không lọc theo giờ nữa: đã chủ động chọn nghĩa là
-    // biết mình lấy gì, kể cả bài cũ hơn cửa sổ.
-    // Giữ nguyên thứ tự của bảng (mới nhất trước) chứ không theo thứ tự bấm chuột.
-    if (bySelection) return posts.filter((p) => selectedIds.has(p.id));
-    // Mặc định: lọc theo GIỜ ĐĂNG chứ không phải giờ cào — "bài trong 6h" tính từ bây giờ.
-    // Bài không rõ giờ đăng (fb_created_at null) bị loại — không chứng minh được là bài mới.
-    if (now === null) return [];
-    const cutoff = now - windowHours * 3600_000;
-    return posts.filter((p) => p.fb_created_at && new Date(p.fb_created_at).getTime() >= cutoff);
-  }, [posts, windowHours, now, bySelection, selectedIds]);
+  const rows = useMemo(
+    () => pickSheetRows(posts, selectedIds, windowHours, now),
+    [posts, selectedIds, windowHours, now],
+  );
 
   async function copy() {
     // Chỉ nội dung, KHÔNG hàng tiêu đề — dán nối tiếp vào sheet có sẵn không bị chen tên cột.
@@ -97,24 +91,41 @@ export function ExportSheetButton({
       return; // clipboard hỏng thì ĐỪNG đánh dấu đã copy, không thì dấu nói dối
     }
 
-    // Copy tay vài bài KHÔNG đánh dấu "đã copy": dấu đó nói về nhịp copy cả page trong ngày
-    // (sheetState so với bài mới nhất). Copy 2 bài lẻ mà đóng dấu cả page là dấu nói dối,
-    // và lần copy định kỳ sau sẽ bị tưởng là đã xong.
-    if (bySelection) return;
-
-    // Ghi mốc đã copy. Hỏng bước này chỉ mất cái nhãn, text đã nằm trong clipboard rồi
-    // nên chỉ cảnh báo nhẹ chứ không báo đỏ như thất bại.
+    // Đánh dấu TỪNG BÀI đã copy — đây là thứ khiến lần copy sau không lấy lại chúng.
+    // Chạy cho CẢ hai chế độ: copy tay cũng là đã copy.
+    // Hỏng bước này chỉ mất cái dấu, text đã nằm trong clipboard rồi nên chỉ cảnh báo nhẹ.
+    let marked = false;
     try {
-      const { res } = await fetchJson(`/api/competitors/${pageId}`, {
-        method: "PATCH",
+      const { res } = await fetchJson(`/api/competitors/${pageId}/mark-copied`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetCopied: true }),
+        body: JSON.stringify({ postIds: rows.map((p) => p.id) }),
       });
-      if (res.ok) router.refresh();
-      else toast.warning("Đã copy nhưng chưa lưu được dấu 'đã copy'");
+      marked = res.ok;
     } catch {
-      toast.warning("Đã copy nhưng chưa lưu được dấu 'đã copy'");
+      marked = false;
     }
+    if (!marked) {
+      toast.warning("Đã copy nhưng CHƯA đánh dấu được — lần sau có thể bị lấy trùng mấy bài này");
+    }
+
+    // Mốc ở cấp PAGE (badge nhịp làm việc trong ngày) chỉ đóng cho lượt copy định kỳ.
+    // Copy tay vài bài mà đóng dấu cả page là dấu nói dối: lượt copy định kỳ sau sẽ bị
+    // tưởng là đã xong.
+    if (!bySelection) {
+      try {
+        await fetchJson(`/api/competitors/${pageId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sheetCopied: true }),
+        });
+      } catch {
+        // Dấu cấp page hỏng không đáng bắn thêm toast thứ hai — dấu từng bài mới là thứ quan trọng.
+      }
+    }
+
+    // refresh() để bảng vẽ lại trạng thái "đã copy" và nút tính lại số bài còn phải copy.
+    router.refresh();
   }
 
   const none = rows.length === 0;
@@ -127,17 +138,17 @@ export function ExportSheetButton({
         disabled={none}
         title={
           none
-            ? `Không có bài nào đăng trong ${windowHours}h qua (tính từ bây giờ). Tick chọn dòng để copy bài bất kỳ.`
+            ? `Không còn bài nào CHƯA copy trong ${windowHours}h qua. Tick chọn dòng để copy lại bài bất kỳ.`
             : bySelection
-              ? `Copy ${rows.length} bài đang tick × ${COLUMN_COUNT} cột. Copy tay không đánh dấu "đã copy" cho page.`
-              : `Copy ${rows.length} bài × ${COLUMN_COUNT} cột (không có hàng tiêu đề), dán thẳng vào Google Sheet`
+              ? `Copy ${rows.length} bài đang tick × ${COLUMN_COUNT} cột — kể cả bài đã copy rồi.`
+              : `Copy ${rows.length} bài chưa copy, đăng trong ${windowHours}h qua × ${COLUMN_COUNT} cột (không hàng tiêu đề)`
         }
         className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 px-2.5 py-1.5 text-xs font-medium transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-800"
       >
         {copied ? <Check className="size-3.5 text-green-600" /> : <Table2 className="size-3.5" />}
         {bySelection
           ? `Copy ${rows.length} bài đã chọn`
-          : `Copy bảng cho Sheet (${now === null ? "…" : `${rows.length} bài ≤${windowHours}h`})`}
+          : `Copy bảng cho Sheet (${now === null ? "…" : `${rows.length} bài mới ≤${windowHours}h`})`}
       </button>
     </div>
   );

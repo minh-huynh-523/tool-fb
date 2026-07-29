@@ -12,7 +12,12 @@ export const scraperConfig = {
   // Mặc định chạy ẩn; HEADFUL=1 để hiện cửa sổ (debug / login).
   headless: process.env.HEADFUL !== '1',
   timeoutMs: Number(process.env.FB_SCRAPE_TIMEOUT_MS ?? 45_000),
-  maxPosts: Number(process.env.FB_SCRAPE_MAX_POSTS ?? 10),
+  // Trần số bài GIỮ LẠI mỗi lượt. <=0 = giữ hết.
+  // Mặc định cao (100) vì trần này cắt SAU khi đã scroll + parse xong: bài bị cắt là bài đã tốn
+  // công lấy về rồi, vứt đi không tiết kiệm được gì mà lại mất luôn. Thứ thật sự giới hạn độ sâu
+  // là scrollRounds. Trần 10 cũ từng cắt mất bài thật ở các page đăng dày (đo được: nhiều lượt
+  // chạm đúng 10 bài).
+  maxPosts: Number(process.env.FB_SCRAPE_MAX_POSTS ?? 100),
   // Chỉ giữ bài đăng trong N giờ đổ lại (khớp chu kỳ cron 6h). 0 = tắt lọc (cào bù lịch sử).
   maxAgeHours: Number(process.env.FB_SCRAPE_MAX_AGE_HOURS ?? 0),
   scrollRounds: Number(process.env.FB_SCRAPE_SCROLL ?? 6),

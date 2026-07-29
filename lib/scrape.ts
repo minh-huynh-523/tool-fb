@@ -1,9 +1,50 @@
 import 'server-only';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
+import { ProxyAgent, type Dispatcher } from 'undici';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36';
+
+// Một số site chặn IP/quốc gia ở tầng CDN (Cloudflare trả 403 cho MỌI path, kể cả /robots.txt).
+// Đổi User-Agent hay dùng browser thật đều vô ích — phải đi từ IP khác. `fetch` của Node KHÔNG tự
+// đọc proxy hệ thống, nên phải chỉ định rõ: SCRAPE_PROXY_URL=http://user:pass@host:port
+const PROXY_URL = process.env.SCRAPE_PROXY_URL?.trim() || '';
+// Status ứng với "bị chặn ở cửa" — đáng retry qua proxy. 404/500 thì retry cũng vô nghĩa.
+const BLOCKED_STATUS = new Set([403, 409, 429, 451, 503]);
+
+let proxyAgent: ProxyAgent | null | undefined;
+function getProxyDispatcher(): Dispatcher | null {
+  if (!PROXY_URL) return null;
+  if (proxyAgent === undefined) {
+    try {
+      proxyAgent = new ProxyAgent(PROXY_URL);
+    } catch {
+      proxyAgent = null; // URL proxy sai định dạng — coi như không có, đừng làm hỏng scrape
+    }
+  }
+  return proxyAgent ?? null;
+}
+
+// Fetch trực tiếp trước (nhanh, không tốn băng thông proxy); chỉ khi bị chặn/lỗi mạng mới đi lại qua proxy.
+async function proxiedFetch(url: string, init: RequestInit): Promise<Response> {
+  let direct: Response | null = null;
+  try {
+    direct = await fetch(url, init);
+    if (direct.ok || !BLOCKED_STATUS.has(direct.status)) return direct;
+  } catch (err) {
+    if (!getProxyDispatcher()) throw err;
+  }
+  const dispatcher = getProxyDispatcher();
+  if (!dispatcher) return direct!;
+  const viaProxy = await fetch(url, { ...init, dispatcher } as RequestInit & {
+    dispatcher: Dispatcher;
+  }).catch(() => null);
+  // Proxy hỏng/cũng bị chặn → trả response trực tiếp để lỗi hiện đúng status gốc.
+  if (viaProxy) return viaProxy;
+  if (direct) return direct;
+  throw new Error('Không tải được trang (cả kết nối trực tiếp lẫn proxy đều lỗi)');
+}
 
 export interface ScrapedArticle {
   title: string;
@@ -45,8 +86,14 @@ function stripSiteSuffix(title: string, siteName: string | null): string {
 }
 
 async function fetchDoc(url: string): Promise<Document> {
-  const res = await fetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' });
-  if (!res.ok) throw new Error(`Không tải được trang (HTTP ${res.status})`);
+  const res = await proxiedFetch(url, { headers: { 'User-Agent': UA }, cache: 'no-store' });
+  if (!res.ok) {
+    const hint =
+      BLOCKED_STATUS.has(res.status) && !PROXY_URL
+        ? ' — site chặn IP này, thử đặt SCRAPE_PROXY_URL (proxy ngoài VN)'
+        : '';
+    throw new Error(`Không tải được trang (HTTP ${res.status})${hint}`);
+  }
   const html = await res.text();
   return new JSDOM(html, { url }).window.document;
 }
@@ -81,7 +128,7 @@ async function tryWpRestContent(u: URL): Promise<{ contentHtml: string; imageUrl
   const slug = u.pathname.replace(/^\/+|\/+$/g, '').split('/').pop();
   if (!slug) return null;
   const api = `${u.origin}/wp-json/wp/v2/posts?slug=${encodeURIComponent(slug)}&_embed=wp:featuredmedia`;
-  const res = await fetch(api, { headers: { 'User-Agent': UA }, cache: 'no-store' });
+  const res = await proxiedFetch(api, { headers: { 'User-Agent': UA }, cache: 'no-store' });
   if (!res.ok) return null;
   const arr = (await res.json().catch(() => [])) as WpRestPost[];
   const post = Array.isArray(arr) ? arr[0] : undefined;

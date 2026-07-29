@@ -36,7 +36,7 @@ export interface ScrapedPage {
 async function collectFeed(
   context: BrowserContext,
   handle: string,
-  opts: { dumpPath?: string } = {},
+  opts: { dumpPath?: string; maxAgeHours?: number } = {},
 ): Promise<ScrapedPage> {
   const page = await context.newPage();
 
@@ -85,9 +85,24 @@ async function collectFeed(
   }
 
   // Scroll để nạp thêm post + comment preview (mỗi vòng nghỉ cho GraphQL kịp trả).
+  //
+  // KHÔNG dùng mouse.wheel / window.scrollBy: <body> của FB KHÔNG cuộn (đo được scrollHeight ===
+  // innerHeight === 900), feed nằm trong một DIV cuộn riêng. Đã thử cả 4 cách — mouse.wheel,
+  // window.scrollBy, scrollTo(bottom), phím End — window.scrollY đứng im ở 0 và số bài parse được
+  // y hệt nhau ở 0, 6 và 20 vòng. Tức vòng lặp cũ là no-op hoàn toàn.
+  // Cách chạy được: tìm phần tử cuộn cao nhất rồi đẩy scrollTop của CHÍNH nó.
   for (let i = 0; i < scraperConfig.scrollRounds; i++) {
-    await page.mouse.wheel(0, 2400);
+    const moved = await page.evaluate(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('*')]
+        .filter((e) => e.scrollHeight > e.clientHeight + 200)
+        .sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+      if (!el) return false;
+      const before = el.scrollTop;
+      el.scrollTop = el.scrollHeight;
+      return el.scrollTop > before;
+    });
     await page.waitForTimeout(1600);
+    if (!moved) break; // chạm đáy (hoặc không có gì cuộn được) -> đừng phí thêm vòng
   }
 
   // Đổ nguyên fragment ra đĩa để soi schema GraphQL thật (FB đổi field liên tục, không đoán được
@@ -105,7 +120,7 @@ async function collectFeed(
     handle,
     pageName,
     fbPageId: pageId ?? (isNumeric(handle) ? handle : null),
-    posts: recentFirst(posts, handle),
+    posts: recentFirst(posts, handle, opts.maxAgeHours),
   };
 }
 
@@ -116,8 +131,12 @@ async function collectFeed(
  * Bài không rõ giờ (createdAt=null) bị loại vì không xác minh được tuổi; log riêng lý do để nếu FB
  * đổi schema (creation_time biến mất) thì lộ ra ngay trên console chứ không âm thầm mất sạch bài.
  */
-function recentFirst(posts: ParsedPost[], handle: string): ParsedPost[] {
-  const { maxAgeHours, maxPosts } = scraperConfig;
+function recentFirst(
+  posts: ParsedPost[],
+  handle: string,
+  maxAgeHours = scraperConfig.maxAgeHours,
+): ParsedPost[] {
+  const { maxPosts } = scraperConfig;
   let kept = posts;
 
   if (maxAgeHours > 0) {
@@ -130,13 +149,25 @@ function recentFirst(posts: ParsedPost[], handle: string): ParsedPost[] {
     }
   }
 
-  return [...kept].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, maxPosts);
+  const sorted = [...kept].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  if (maxPosts <= 0) return sorted; // <=0 = giữ hết
+
+  const cut = sorted.slice(0, maxPosts);
+  // Chạm trần phải LA LÊN: bài bị cắt ở đây là bài đã scroll + parse xong, vứt đi là mất hẳn cho
+  // tới lượt sau (và nếu page đăng dày thì lượt sau cũng không với tới). Im lặng thì mất bài mà
+  // nhìn UI không tài nào biết — đúng cái đã xảy ra với trần 10 cũ.
+  if (sorted.length > cut.length) {
+    console.warn(
+      `  ${handle}: CHẠM TRẦN maxPosts=${maxPosts} — bỏ ${sorted.length - cut.length}/${sorted.length} bài. Nâng FB_SCRAPE_MAX_POSTS.`,
+    );
+  }
+  return cut;
 }
 
 /** Cào 1 page (tự mở & đóng browser). Dùng cho chạy lẻ. */
 export async function scrapeCompetitorPage(
   handle: string,
-  opts: { dumpPath?: string } = {},
+  opts: { dumpPath?: string; maxAgeHours?: number } = {},
 ): Promise<ScrapedPage> {
   const { browser, context } = await launchStealth();
   try {
@@ -146,17 +177,23 @@ export async function scrapeCompetitorPage(
   }
 }
 
+export interface ScrapeManyOpts {
+  dumpPath?: string;
+  maxAgeHours?: number;
+}
+
 /** Cào nhiều page trong CÙNG 1 browser (tiết kiệm, nghỉ delayMs giữa các page). */
 export async function scrapeMany(
   handles: string[],
   onEach: (r: ScrapedPage | { handle: string; error: string; blocked: boolean }) => Promise<void>,
+  opts: ScrapeManyOpts = {},
 ): Promise<void> {
   const { browser, context } = await launchStealth();
   try {
     for (let i = 0; i < handles.length; i++) {
       const handle = handles[i];
       try {
-        const r = await collectFeed(context, handle);
+        const r = await collectFeed(context, handle, opts);
         await onEach(r);
       } catch (e) {
         await onEach({ handle, error: (e as Error).message, blocked: e instanceof BlockedError });

@@ -61,27 +61,23 @@ async function runDaemon() {
 async function runDry(handle: string, dumpPath?: string) {
   const { scrapeCompetitorPage } = await import('../lib/fb-scraper/client');
   const saved = scraperConfig.maxAgeHours;
-  scraperConfig.maxAgeHours = 0; // tắt lọc để thấy TOÀN BỘ bài cào được
-  try {
-    const r = await scrapeCompetitorPage(handle, { dumpPath });
-    console.log(`\n${r.pageName ?? handle} — ${r.posts.length} bài (chưa lọc):\n`);
-    for (const p of r.posts) {
-      const age = p.createdAt ? `${((Date.now() / 1000 - p.createdAt) / 3600).toFixed(1)}h trước` : '—';
-      const when = p.createdAt ? new Date(p.createdAt * 1000).toLocaleString('vi-VN') : 'không rõ';
-      const links = [...p.linkUrls, ...p.comments.flatMap((c) => c.linkUrls)];
-      const linkTag = links.length ? ` [${links.length} link]` : '';
-      console.log(
-        `• ${when.padEnd(22)} ${age.padEnd(12)} ${(p.caption || '(không caption)').slice(0, 50).replace(/\n/g, ' ')}${linkTag}`,
-      );
-      for (const l of [...new Set(links)]) console.log(`      ↳ ${l}`);
-    }
-    const noTime = r.posts.filter((p) => !p.createdAt).length;
-    if (noTime) console.log(`\n⚠ ${noTime}/${r.posts.length} bài không rõ giờ → sẽ bị bộ lọc ${saved}h loại.`);
-    const noLink = r.posts.filter((p) => !p.linkUrls.length && !p.comments.some((c) => c.linkUrls.length)).length;
-    console.log(`\n${r.posts.length - noLink}/${r.posts.length} bài bóc được ít nhất 1 link.`);
-  } finally {
-    scraperConfig.maxAgeHours = saved;
+  // Tắt lọc để thấy TOÀN BỘ bài cào được, nhưng vẫn giữ biến `saved` để log cảnh báo.
+  const r = await scrapeCompetitorPage(handle, { dumpPath, maxAgeHours: 0 });
+  console.log(`\n${r.pageName ?? handle} — ${r.posts.length} bài (chưa lọc):\n`);
+  for (const p of r.posts) {
+    const age = p.createdAt ? `${((Date.now() / 1000 - p.createdAt) / 3600).toFixed(1)}h trước` : '—';
+    const when = p.createdAt ? new Date(p.createdAt * 1000).toLocaleString('vi-VN') : 'không rõ';
+    const links = [...p.linkUrls, ...p.comments.flatMap((c) => c.linkUrls)];
+    const linkTag = links.length ? ` [${links.length} link]` : '';
+    console.log(
+      `• ${when.padEnd(22)} ${age.padEnd(12)} ${(p.caption || '(không caption)').slice(0, 50).replace(/\n/g, ' ')}${linkTag}`,
+    );
+    for (const l of [...new Set(links)]) console.log(`      ↳ ${l}`);
   }
+  const noTime = r.posts.filter((p) => !p.createdAt).length;
+  if (noTime) console.log(`\n⚠ ${noTime}/${r.posts.length} bài không rõ giờ → sẽ bị bộ lọc ${saved}h loại.`);
+  const noLink = r.posts.filter((p) => !p.linkUrls.length && !p.comments.some((c) => c.linkUrls.length)).length;
+  console.log(`\n${r.posts.length - noLink}/${r.posts.length} bài bóc được ít nhất 1 link.`);
 }
 
 async function main() {

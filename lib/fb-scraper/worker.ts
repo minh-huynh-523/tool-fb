@@ -4,7 +4,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createWorkerSupabase } from './supabase';
-import { BlockedError, scrapeMany, type ScrapedPage } from './client';
+import { BlockedError, scrapeMany, type ScrapedPage, type ScrapeManyOpts } from './client';
 import { launchStealth } from './browser';
 import { linksFromPostPage, randomDelayMs } from './post-links';
 import { scraperConfig } from './config';
@@ -14,7 +14,11 @@ const toIso = (unix: number | null) => (unix ? new Date(unix * 1000).toISOString
 
 // Ghi 1 kết quả cào vào DB: cập nhật page + upsert post + upsert comment.
 async function persist(db: SupabaseClient, pageRow: CompetitorPageRow, r: ScrapedPage): Promise<number> {
-  await db
+  // PHẢI xem error: câu update này từng hỏng ÂM THẦM suốt nhiều ngày vì thiếu cột `fail_count`
+  // (migration 0011 chưa chạy) — PostgREST từ chối cả câu, nên last_scraped_at/last_error/name
+  // đều không được ghi. UI hiện "chưa cào" cho page vừa cào xong 5 phút trước mà không ai biết
+  // vì log im lặng. Cào vẫn chạy được nên đừng ném lỗi, chỉ cần LA LÊN.
+  const { error: upErr } = await db
     .from('competitor_page')
     .update({
       name: r.pageName ?? pageRow.name,
@@ -24,6 +28,10 @@ async function persist(db: SupabaseClient, pageRow: CompetitorPageRow, r: Scrape
       fail_count: 0, // cào lại được ⇒ xoá lịch sử lỗi, để lần hỏng sau đếm lại từ đầu
     })
     .eq('id', pageRow.id);
+  if (upErr) {
+    console.error(`  ↳ KHÔNG ghi được trạng thái cào cho "${pageRow.handle}": ${upErr.message}`);
+    console.error('    (thiếu cột? chạy migration còn thiếu trong supabase/migrations/)');
+  }
 
   let commentCount = 0;
   for (const p of r.posts) {
@@ -81,7 +89,7 @@ const MAX_FAILS = 3;
 async function markError(db: SupabaseClient, pageRow: CompetitorPageRow, msg: string, blocked: boolean) {
   const fails = (pageRow.fail_count ?? 0) + 1;
   const off = blocked || fails >= MAX_FAILS;
-  await db
+  const { error: upErr } = await db
     .from('competitor_page')
     .update({
       last_error: msg,
@@ -90,13 +98,20 @@ async function markError(db: SupabaseClient, pageRow: CompetitorPageRow, msg: st
       ...(off ? { active: false } : {}),
     })
     .eq('id', pageRow.id);
+  // Cùng lý do với persist(): nuốt lỗi ở ĐÂY còn tệ hơn — mất luôn cả cơ chế tự tắt page hỏng,
+  // page bị chặn sẽ được thử lại vô hạn mỗi lượt mà không để lại dấu vết nào.
+  if (upErr) console.error(`  ↳ KHÔNG ghi được lỗi cào cho "${pageRow.handle}": ${upErr.message}`);
   if (off) {
     console.warn(`  ↳ tắt theo dõi "${pageRow.handle}" (${blocked ? 'bị chặn' : `${fails} lượt lỗi liên tiếp`}) — bật lại trên UI`);
   }
 }
 
 /** Cào danh sách pageRow (cùng 1 browser), ghi DB. 1 page lỗi không chặn cả batch. */
-export async function scrapePages(db: SupabaseClient, pages: CompetitorPageRow[]): Promise<void> {
+export async function scrapePages(
+  db: SupabaseClient,
+  pages: CompetitorPageRow[],
+  opts: ScrapeManyOpts = {},
+): Promise<void> {
   if (!pages.length) return;
   const byHandle = new Map(pages.map((p) => [p.handle, p]));
   await scrapeMany(
@@ -112,6 +127,7 @@ export async function scrapePages(db: SupabaseClient, pages: CompetitorPageRow[]
       const n = await persist(db, pageRow, res);
       console.log(`✓ ${res.handle} (${res.pageName}): ${res.posts.length} post, ${n} comment của page`);
     },
+    opts,
   );
 }
 
@@ -249,7 +265,8 @@ export async function processScrapeRequests(db = createWorkerSupabase()): Promis
   ) as CompetitorPageRow[];
   if (due.length) {
     console.log(`[poll] ${due.length} đơn cào on-demand...`);
-    await scrapePages(db, due);
+    // Nút "Cào ngay" luôn lấy bài mới nhất trong 1 ngày, bất kể FB_SCRAPE_MAX_AGE_HOURS của cron.
+    await scrapePages(db, due, { maxAgeHours: 24 });
     await scrapePostLinks(db).catch((e) => console.error('[link] lỗi:', (e as Error).message));
   }
   return due.length;

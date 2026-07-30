@@ -172,7 +172,18 @@ export async function PATCH(
     .eq("status", row.status) // optimistic: tránh đè khi worker vừa claim
     .select()
     .maybeSingle();
-  if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
+  // 23505 = đụng scheduled_comment_no_dup_idx (migration 0019): sửa xong thì row này trùng y hệt
+  // một comment khác của cùng bài. Cả FAILED -> PENDING ở trên cũng có thể kích hoạt (row FAILED
+  // nằm ngoài index, chuyển về PENDING là bước vào).
+  if (upErr) {
+    if (upErr.code === "23505") {
+      return NextResponse.json(
+        { error: "Bài này đã có comment y hệt (nội dung + link) — sửa vậy sẽ thành 2 comment trùng trên Facebook." },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ error: upErr.message }, { status: 500 });
+  }
   if (!updated) {
     return NextResponse.json({ error: "Comment vừa được worker xử lý — tải lại trang để xem trạng thái." }, { status: 409 });
   }

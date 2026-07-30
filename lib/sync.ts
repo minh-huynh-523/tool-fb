@@ -189,7 +189,27 @@ export async function syncPage(pageId: string, opts: { limit?: number } = {}): P
             continue;
           }
           commentsPostId = (live as { id: string }).id;
-          await db.from('scheduled_comment').update({ post_id: commentsPostId, fb_post_id: realId }).eq('post_id', ph.id);
+          // Dời TỪNG row, không update cả loạt: từ migration 0019, row nào trùng y hệt comment đã
+          // có sẵn ở bài live sẽ vi phạm unique index. Update cả loạt thì cả lô hỏng theo, mà ngay
+          // sau đó `delete post` lại cascade xoá sạch comment (post_id ... on delete cascade) —
+          // mất luôn comment KHÔNG trùng. Trùng thì bỏ đi (bài live đã có bản y hệt), lỗi khác thì
+          // giữ placeholder lại để lần sync sau thử tiếp, KHÔNG xoá.
+          const { data: moving } = await db.from('scheduled_comment').select('id').eq('post_id', ph.id);
+          let moveFailed = false;
+          for (const c of ((moving ?? []) as { id: string }[])) {
+            const { error: cErr } = await db
+              .from('scheduled_comment')
+              .update({ post_id: commentsPostId, fb_post_id: realId })
+              .eq('id', c.id);
+            if (!cErr) continue;
+            if (cErr.code === '23505') {
+              await db.from('scheduled_comment').delete().eq('id', c.id);
+            } else {
+              moveFailed = true;
+              warnings.push(`Dời comment ${c.id} sang bài live ${realId} lỗi: ${cErr.message}`);
+            }
+          }
+          if (moveFailed) continue;
           await db.from('scraped_article').update({ post_id: commentsPostId }).eq('post_id', ph.id); // best-effort (unique post_id)
           await db.from('post').delete().eq('id', ph.id);
         } else {
@@ -197,11 +217,19 @@ export async function syncPage(pageId: string, opts: { limit?: number } = {}): P
           await db.from('scheduled_comment').update({ fb_post_id: realId }).eq('post_id', ph.id);
         }
         // Comment FAILED (fail vì bắn vào video id chết trước khi reconcile) -> PENDING để thử lại.
-        await db
+        // Từng row: FAILED nằm NGOÀI unique index 0019, quay về PENDING là bước vào — row nào trùng
+        // với comment đã lên lịch/đã đăng thì cứ để FAILED, đừng làm hỏng cả lô còn lại.
+        const { data: failed } = await db
           .from('scheduled_comment')
-          .update({ status: 'PENDING', error: null, claimed_at: null })
+          .select('id')
           .eq('post_id', commentsPostId)
           .eq('status', 'FAILED');
+        for (const c of ((failed ?? []) as { id: string }[])) {
+          await db
+            .from('scheduled_comment')
+            .update({ status: 'PENDING', error: null, claimed_at: null })
+            .eq('id', c.id);
+        }
       }
     }
 

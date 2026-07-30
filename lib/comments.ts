@@ -40,6 +40,9 @@ const BACKOFF_MS = [5 * 60_000, 15 * 60_000];
 
 function isRetryable(e: unknown): boolean {
   if (!(e instanceof FacebookError)) return false;
+  // Hết giờ chờ = KHÔNG biết FB đã tạo comment hay chưa. Thử lại có thể ra 2 comment trùng trên
+  // bài — để FAILED cho người dùng nhìn bài rồi tự quyết, đắt hơn nhiều nếu đoán sai chiều kia.
+  if (e.type === 'timeout') return false;
   if (e.code === undefined) return true; // lỗi mạng: FacebookError ném ra không kèm code
   if (e.status !== undefined && e.status >= 500) return true;
   return RETRYABLE_CODES.has(e.code);

@@ -31,8 +31,9 @@ async function callGraph<T = unknown>(opts: {
   accessToken: string;
   params?: GraphParams;
   body?: Record<string, string | number | undefined>;
+  timeoutMs?: number;
 }): Promise<T> {
-  const { endpoint, method = 'GET', accessToken, params = {}, body } = opts;
+  const { endpoint, method = 'GET', accessToken, params = {}, body, timeoutMs } = opts;
   const url = new URL(FB.BASE + endpoint.replace(/^\//, ''));
   url.searchParams.set('access_token', accessToken);
   const proof = appsecretProof(accessToken);
@@ -42,6 +43,7 @@ async function callGraph<T = unknown>(opts: {
   }
 
   const init: RequestInit = { method, cache: 'no-store' };
+  if (timeoutMs) init.signal = AbortSignal.timeout(timeoutMs);
   if (body && method !== 'GET') {
     const form = new URLSearchParams();
     for (const [k, v] of Object.entries(body)) {
@@ -55,7 +57,13 @@ async function callGraph<T = unknown>(opts: {
   try {
     res = await fetch(url, init);
   } catch (e) {
-    throw new FacebookError(`Không kết nối được Facebook Graph: ${(e as Error).message}`);
+    // Timeout ≠ lỗi mạng: hết giờ chờ nghĩa là KHÔNG BIẾT FB đã nhận hay chưa. Đánh dấu type
+    // 'timeout' để tầng trên đừng thử lại (thử lại có thể thành comment thứ 2 trên FB).
+    const err = e as Error;
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      throw new FacebookError(`Facebook Graph không phản hồi trong ${timeoutMs}ms`, { type: 'timeout' });
+    }
+    throw new FacebookError(`Không kết nối được Facebook Graph: ${err.message}`);
   }
   const json = (await res.json().catch(() => ({}))) as { error?: Record<string, unknown> } & Record<string, unknown>;
   if (!res.ok || json?.error) {
@@ -255,6 +263,11 @@ export function extractMedia(item: FbFeedItem): { mediaType: string | null; medi
   return { mediaType, mediaUrl };
 }
 
+// Trần thời gian cho CHÍNH lệnh đăng comment. `fetch` không có timeout mặc định, mà worker coi row
+// PROCESSING quá staleMs (mặc định 120s) là treo và cho lượt cron sau gửi LẠI — call treo lâu hơn
+// mốc đó là bắn 2 comment thật lên FB. Trần này phải luôn nhỏ hơn staleMs.
+const COMMENT_TIMEOUT_MS = 30_000;
+
 // Đăng comment: POST /{fbPostId}/comments  body {message, attachment_url}
 export async function createPostComment(
   fbPostId: string,
@@ -269,5 +282,6 @@ export async function createPostComment(
     method: 'POST',
     accessToken,
     body,
+    timeoutMs: COMMENT_TIMEOUT_MS,
   });
 }

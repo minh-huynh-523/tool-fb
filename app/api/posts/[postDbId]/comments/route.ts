@@ -101,6 +101,38 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
     runAfter = new Date(baseMs + commentDelayMs()).toISOString();
   }
 
+  // CHẶN TRÙNG. Nguồn thật sự của bug "FB hiện 2 comment giống hệt": hàng đợi bị nạp 2 lần
+  // (bấm ở 2 chỗ với dữ liệu cũ, mở 2 tab, chạy lại batch), KHÔNG phải worker gửi lặp — 8 cặp
+  // trùng trong DB đều attempts=0 và có fb_comment_id khác nhau.
+  // Guard client-side (nút disable, badge "Đã lên lịch") không đủ: nó đọc props có thể đã cũ.
+  // FAILED không tính là trùng — bài fail thì phải lên lịch lại được y hệt.
+  const dupQuery = db
+    .from("scheduled_comment")
+    .select("id, status, run_after, sent_at")
+    .eq("post_id", p.id)
+    .eq("message", message)
+    .neq("status", "FAILED");
+  const { data: dup, error: dupErr } = await (
+    attachmentUrl ? dupQuery.eq("attachment_url", attachmentUrl) : dupQuery.is("attachment_url", null)
+  )
+    .limit(1)
+    .maybeSingle();
+  if (dupErr) return NextResponse.json({ error: dupErr.message }, { status: 500 });
+  if (dup) {
+    const d = dup as Pick<ScheduledCommentRow, "id" | "status" | "run_after" | "sent_at">;
+    return NextResponse.json(
+      {
+        error:
+          d.status === "SENT"
+            ? "Comment y hệt đã ĐĂNG cho bài này rồi — thêm nữa là Facebook hiện 2 comment trùng."
+            : "Comment y hệt đang chờ đăng cho bài này rồi.",
+        duplicate: true,
+        existing: d,
+      },
+      { status: 409 },
+    );
+  }
+
   const { data: inserted, error: insErr } = await db
     .from("scheduled_comment")
     .insert({
@@ -114,7 +146,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
     })
     .select()
     .single();
-  if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
+  // 23505 = unique violation của scheduled_comment_no_dup_idx (migration 0019): hai request
+  // đồng thời cùng lọt qua vòng kiểm tra ở trên. Đây là chốt atomic, không phải lỗi hệ thống.
+  if (insErr) {
+    if (insErr.code === "23505") {
+      return NextResponse.json(
+        { error: "Comment y hệt vừa được thêm cho bài này (bấm 2 lần?) — không thêm nữa.", duplicate: true },
+        { status: 409 },
+      );
+    }
+    return NextResponse.json({ error: insErr.message }, { status: 500 });
+  }
 
   const row = inserted as ScheduledCommentRow;
 

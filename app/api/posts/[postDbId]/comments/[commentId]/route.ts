@@ -156,8 +156,7 @@ export async function PATCH(
   }
 
   // FAILED -> cho chạy lại với lịch mới (chỉ khi có thay đổi thật — check rỗng đã nằm phía trên).
-  // attempts về 0: đây là lần thử lại DO NGƯỜI dùng bấm, phải được cấp lại đủ lượt retry tự động.
-  // Không reset thì comment đã cháy hết 3 lượt sẽ FAILED ngay lần lỗi đầu tiên.
+  // attempts về 0: đây là lần thử lại DO NGƯỜI dùng bấm, reset bộ đếm để theo dõi lại từ đầu.
   if (row.status === "FAILED") {
     update.status = "PENDING";
     update.error = null;

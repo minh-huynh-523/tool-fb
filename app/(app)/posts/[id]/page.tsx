@@ -52,7 +52,12 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
                 postDbId={post.id}
                 existing={
                   scraped
-                    ? { editUrl: scraped.wp_edit_url, status: scraped.wp_status, permalink: scraped.wp_permalink }
+                    ? {
+                        editUrl: scraped.wp_edit_url,
+                        status: scraped.wp_status,
+                        permalink: scraped.wp_permalink,
+                        sourceUrl: scraped.source_url,
+                      }
                     : null
                 }
                 commentsInfo={{

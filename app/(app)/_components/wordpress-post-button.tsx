@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Copy, ExternalLink, FileText, Loader2, MessageSquarePlus } from "lucide-react";
+import { Check, Copy, ExternalLink, FileText, Loader2, MessageSquarePlus, Pencil } from "lucide-react";
 import { fetchJson } from "@/lib/fetch-json";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -160,15 +160,20 @@ export function WordpressPostButton({
   commentsInfo,
 }: {
   postDbId: string;
-  existing?: { editUrl: string | null; status: string | null; permalink: string | null } | null;
+  existing?: { editUrl: string | null; status: string | null; permalink: string | null; sourceUrl?: string | null } | null;
   // Thông tin comment đã lên lịch của post: giờ first comment + nội dung (check trùng permalink).
   commentsInfo?: { firstRunAfter: string | null; texts: string[] };
 }) {
   const router = useRouter();
+  // Bài đã có trên WP -> dialog chuyển sang chế độ SỬA (cào lại + sửa nội dung + cập nhật, PUT)
+  // thay vì tạo bài mới (POST).
+  const isEdit = !!existing?.editUrl;
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [title, setTitle] = useState("");
+  const [content, setContent] = useState(""); // nội dung HTML — sửa được trước khi đăng/cập nhật
+  const [showContentPreview, setShowContentPreview] = useState(false);
   const [loading, setLoading] = useState(false);
   const [image, setImage] = useState<ImageOverride>({ kind: "auto" });
   const [imageUrlInput, setImageUrlInput] = useState("");
@@ -178,25 +183,6 @@ export function WordpressPostButton({
     status: "draft" | "publish";
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Đã tạo bài WP -> mở bài/nháp + copy permalink + option đăng permalink vào comment.
-  if (existing?.editUrl) {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="outline" size="sm" asChild>
-          <a href={existing.editUrl} target="_blank" rel="noopener noreferrer">
-            <ExternalLink /> {existing.status === "publish" ? "Mở bài WP" : "Mở nháp WP"}
-          </a>
-        </Button>
-        {existing.permalink && (
-          <>
-            <CopyPermalinkButton postDbId={postDbId} url={existing.permalink} />
-            <ScheduleCommentButton postDbId={postDbId} permalink={existing.permalink} commentsInfo={commentsInfo} />
-          </>
-        )}
-      </div>
-    );
-  }
 
   function setImageOverride(next: ImageOverride) {
     setImage((prev) => {
@@ -209,6 +195,8 @@ export function WordpressPostButton({
     setUrl("");
     setPreview(null);
     setTitle("");
+    setContent("");
+    setShowContentPreview(false);
     setImageOverride({ kind: "auto" });
     setImageUrlInput("");
     setPublished(null);
@@ -249,7 +237,7 @@ export function WordpressPostButton({
     setImageOverride({ kind: "file", file, objectUrl: URL.createObjectURL(file) });
   }
 
-  // BƯỚC 1: cào về để xem trước (title + ảnh + trích đoạn).
+  // BƯỚC 1: cào về để xem trước (title + ảnh + trích đoạn + nội dung — sẽ sửa được ở bước 2).
   async function doScrape() {
     if (!url.trim()) {
       toast.error("Cần nhập link bài gốc");
@@ -274,6 +262,8 @@ export function WordpressPostButton({
         parts: data.parts ?? 1,
       });
       setTitle(data.title ?? "");
+      setContent(data.contentHtml ?? "");
+      setShowContentPreview(false);
       setImageOverride({ kind: "auto" });
       setImageUrlInput("");
     } catch (e) {
@@ -283,10 +273,15 @@ export function WordpressPostButton({
     }
   }
 
-  // BƯỚC 2: xác nhận -> đăng (draft hoặc publish luôn) với title + ảnh đại diện đã duyệt (multipart để gửi được file).
-  async function doPublish(status: "draft" | "publish") {
+  // BƯỚC 2: xác nhận -> tạo bài mới (POST) hoặc cập nhật bài đã có (PUT), với title + nội dung + ảnh
+  // đại diện đã duyệt/sửa (multipart để gửi được file).
+  async function doSubmit(status: "draft" | "publish") {
     if (!title.trim()) {
       toast.error("Tiêu đề không được trống");
+      return;
+    }
+    if (isEdit && !content.trim()) {
+      toast.error("Nội dung không được trống");
       return;
     }
     setLoading(true);
@@ -294,17 +289,27 @@ export function WordpressPostButton({
       const fd = new FormData();
       fd.set("sourceUrl", url.trim());
       fd.set("title", title.trim());
+      fd.set("contentHtml", content);
       fd.set("imageMode", image.kind === "file" ? "upload" : image.kind);
       if (image.kind === "url") fd.set("imageUrl", image.url);
       if (image.kind === "file") fd.set("imageFile", image.file);
       fd.set("wpStatus", status);
       // KHÔNG set Content-Type — browser tự set boundary multipart.
-      const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress`, { method: "POST", body: fd });
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress`, {
+        method: isEdit ? "PUT" : "POST",
+        body: fd,
+      });
       if (!res.ok) {
-        toast.error(data.error ?? (status === "publish" ? "Đăng bài thất bại" : "Đăng nháp thất bại"));
+        toast.error(data.error ?? (isEdit ? "Cập nhật bài thất bại" : status === "publish" ? "Đăng bài thất bại" : "Đăng nháp thất bại"));
         return;
       }
-      toast.success(status === "publish" ? "Đã đăng bài trên WordPress" : "Đã tạo bản nháp trên WordPress");
+      toast.success(
+        isEdit
+          ? "Đã cập nhật bài trên WordPress"
+          : status === "publish"
+            ? "Đã đăng bài trên WordPress"
+            : "Đã tạo bản nháp trên WordPress",
+      );
       setPublished({ editUrl: data.editUrl ?? null, permalink: data.permalink ?? null, status });
       router.refresh();
     } catch (e) {
@@ -315,216 +320,289 @@ export function WordpressPostButton({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) reset();
-      }}
-    >
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <FileText /> Tạo bài WP
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Tạo bài WordPress</DialogTitle>
-          <DialogDescription>
-            B1: cào bài gốc → B2: xác nhận tiêu đề + ảnh → đăng nháp hoặc đăng luôn lên site WordPress của page
-            này (cấu hình ở trang Pages).
-          </DialogDescription>
-        </DialogHeader>
+    <div className="flex flex-wrap items-center gap-2">
+      {/* Bài đã có trên WP -> mở bài/nháp + copy permalink + option đăng permalink vào comment. */}
+      {isEdit && (
+        <>
+          <Button variant="outline" size="sm" asChild>
+            <a href={existing!.editUrl!} target="_blank" rel="noopener noreferrer">
+              <ExternalLink /> {existing!.status === "publish" ? "Mở bài WP" : "Mở nháp WP"}
+            </a>
+          </Button>
+          {existing!.permalink && (
+            <>
+              <CopyPermalinkButton postDbId={postDbId} url={existing!.permalink} />
+              <ScheduleCommentButton postDbId={postDbId} permalink={existing!.permalink} commentsInfo={commentsInfo} />
+            </>
+          )}
+        </>
+      )}
 
-        {published ? (
-          <>
-            {/* Đăng xong: permalink + copy + mở bài/nháp + option đăng vào comment */}
-            <div className="space-y-3">
-              <p className="text-sm">
-                {published.status === "publish" ? "Đã đăng bài trên WordPress." : "Đã tạo bản nháp trên WordPress."}
-              </p>
-              {published.permalink && (
-                <div className="space-y-1.5">
-                  <Label>Permalink</Label>
-                  <div className="flex items-center gap-2">
-                    <Input readOnly value={published.permalink} onFocus={(e) => e.currentTarget.select()} />
-                    <CopyPermalinkButton postDbId={postDbId} url={published.permalink} label="Copy" />
-                  </div>
-                </div>
-              )}
-              <div className="flex flex-wrap items-center gap-2">
-                {published.editUrl && (
-                  <Button variant="outline" size="sm" asChild>
-                    <a href={published.editUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink /> {published.status === "publish" ? "Mở bài WP" : "Mở nháp WP"}
-                    </a>
-                  </Button>
-                )}
-                {published.permalink && (
-                  <ScheduleCommentButton
-                    postDbId={postDbId}
-                    permalink={published.permalink}
-                    commentsInfo={commentsInfo}
-                  />
-                )}
-              </div>
-              {published.status === "draft" && (
-                <p className="text-xs text-muted-foreground">
-                  Bài đang ở dạng nháp — nút Copy/Đăng vào comment sẽ kiểm tra link thật và chỉ chạy sau khi bài đã
-                  publish trên WP.
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          setOpen(o);
+          if (o) {
+            if (isEdit) setUrl(existing?.sourceUrl ?? "");
+          } else {
+            reset();
+          }
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button variant="outline" size="sm">
+            {isEdit ? (
+              <>
+                <Pencil /> Sửa nội dung
+              </>
+            ) : (
+              <>
+                <FileText /> Tạo bài WP
+              </>
+            )}
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{isEdit ? "Sửa bài WordPress" : "Tạo bài WordPress"}</DialogTitle>
+            <DialogDescription>
+              {isEdit
+                ? "B1: cào lại bài gốc → B2: sửa tiêu đề/nội dung/ảnh → cập nhật bài đã có trên WordPress (giữ nguyên permalink)."
+                : "B1: cào bài gốc → B2: xác nhận tiêu đề + ảnh → đăng nháp hoặc đăng luôn lên site WordPress của page này (cấu hình ở trang Pages)."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {published ? (
+            <>
+              {/* Đăng/cập nhật xong: permalink + copy + mở bài/nháp + option đăng vào comment */}
+              <div className="space-y-3">
+                <p className="text-sm">
+                  {isEdit
+                    ? "Đã cập nhật bài trên WordPress."
+                    : published.status === "publish"
+                      ? "Đã đăng bài trên WordPress."
+                      : "Đã tạo bản nháp trên WordPress."}
                 </p>
-              )}
-            </div>
-            <DialogFooter>
-              <Button onClick={() => setOpen(false)}>Đóng</Button>
-            </DialogFooter>
-          </>
-        ) : !preview ? (
-          <>
-            <div className="space-y-2">
-              <Label htmlFor="wp-source-url">Link bài gốc</Label>
-              <Input
-                id="wp-source-url"
-                placeholder="https://1millionstories.net/…"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !loading) doScrape();
-                }}
-              />
-            </div>
-            <DialogFooter>
-              <Button onClick={doScrape} disabled={loading}>
-                {loading ? (
-                  <>
-                    <Loader2 className="animate-spin" /> Đang cào…
-                  </>
-                ) : (
-                  "Cào về"
-                )}
-              </Button>
-            </DialogFooter>
-          </>
-        ) : (
-          <>
-            <div className="space-y-3">
-              {/* Ảnh đại diện — sửa được: dán link / upload từ máy / bỏ ảnh */}
-              <div className="space-y-1.5">
-                <Label className="flex items-center gap-2">
-                  Ảnh đại diện
-                  <Badge variant="secondary">
-                    {image.kind === "auto" ? "ảnh gốc" : image.kind === "none" ? "đã bỏ ảnh" : "ảnh mới"}
-                  </Badge>
-                </Label>
-                {effectiveImageSrc ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={effectiveImageSrc}
-                    alt=""
-                    className="max-h-40 w-full rounded-lg object-cover"
-                    onError={() => {
-                      if (image.kind === "url") {
-                        toast.error("Không tải được ảnh từ link — dùng lại ảnh gốc");
-                        setImageOverride({ kind: "auto" });
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="flex h-24 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
-                    Không có ảnh đại diện
+                {published.permalink && (
+                  <div className="space-y-1.5">
+                    <Label>Permalink</Label>
+                    <div className="flex items-center gap-2">
+                      <Input readOnly value={published.permalink} onFocus={(e) => e.currentTarget.select()} />
+                      <CopyPermalinkButton postDbId={postDbId} url={published.permalink} label="Copy" />
+                    </div>
                   </div>
                 )}
-                <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="Dán link ảnh mới…"
-                    value={imageUrlInput}
-                    onChange={(e) => setImageUrlInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        applyImageUrl();
-                      }
-                    }}
-                  />
-                  <Button variant="outline" size="sm" onClick={applyImageUrl} disabled={!imageUrlInput.trim()}>
-                    Dùng link
-                  </Button>
-                </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="max-w-56 text-xs"
-                    onChange={(e) => {
-                      applyImageFile(e.target.files?.[0]);
-                      e.target.value = "";
-                    }}
-                  />
-                  <Button variant="ghost" size="sm" onClick={() => setImageOverride({ kind: "none" })}>
-                    Bỏ ảnh
-                  </Button>
-                  {image.kind !== "auto" && (
-                    <Button variant="ghost" size="sm" onClick={() => setImageOverride({ kind: "auto" })}>
-                      Khôi phục ảnh gốc
+                  {published.editUrl && (
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={published.editUrl} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink /> {published.status === "publish" ? "Mở bài WP" : "Mở nháp WP"}
+                      </a>
                     </Button>
                   )}
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="wp-title">Tiêu đề (giữ nguyên từ bài gốc — sửa được)</Label>
-                <Textarea id="wp-title" rows={2} value={title} onChange={(e) => setTitle(e.target.value)} />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-muted-foreground">Mô tả (description)</Label>
-                <p className="line-clamp-4 text-sm text-muted-foreground">{preview.description || "(trống)"}</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-muted-foreground">
-                  Nội dung cào về (xem full để validate)
-                  {preview.parts > 1 && (
-                    <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">
-                      đã gộp {preview.parts} phần
-                    </span>
+                  {published.permalink && (
+                    <ScheduleCommentButton
+                      postDbId={postDbId}
+                      permalink={published.permalink}
+                      commentsInfo={commentsInfo}
+                    />
                   )}
-                </Label>
-                <div
-                  className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm [&_a]:text-blue-600 [&_h2]:mt-3 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-medium [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_p]:mb-2"
-                  dangerouslySetInnerHTML={{ __html: preview.contentHtml || "<p>(trống)</p>" }}
+                </div>
+                {published.status === "draft" && (
+                  <p className="text-xs text-muted-foreground">
+                    Bài đang ở dạng nháp — nút Copy/Đăng vào comment sẽ kiểm tra link thật và chỉ chạy sau khi bài đã
+                    publish trên WP.
+                  </p>
+                )}
+              </div>
+              <DialogFooter>
+                <Button onClick={() => setOpen(false)}>Đóng</Button>
+              </DialogFooter>
+            </>
+          ) : !preview ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="wp-source-url">Link bài gốc</Label>
+                <Input
+                  id="wp-source-url"
+                  placeholder="https://1millionstories.net/…"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !loading) doScrape();
+                  }}
                 />
               </div>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Đăng vào category <span className="font-medium text-foreground">Story</span> — chọn{" "}
-              <span className="font-medium text-foreground">Đăng nháp</span> (draft) hoặc{" "}
-              <span className="font-medium text-foreground">Đăng luôn</span> (publish công khai ngay).
-            </p>
-            <DialogFooter className="gap-2 sm:gap-2">
-              <Button variant="outline" onClick={() => setPreview(null)} disabled={loading}>
-                Cào lại
-              </Button>
-              <Button variant="secondary" onClick={() => doPublish("draft")} disabled={loading || !title.trim()}>
-                {loading ? (
-                  <>
-                    <Loader2 className="animate-spin" /> Đang đăng…
-                  </>
+              <DialogFooter>
+                <Button onClick={doScrape} disabled={loading}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="animate-spin" /> Đang cào…
+                    </>
+                  ) : isEdit ? (
+                    "Cào lại"
+                  ) : (
+                    "Cào về"
+                  )}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <div className="space-y-3">
+                {/* Ảnh đại diện — sửa được: dán link / upload từ máy / bỏ ảnh */}
+                <div className="space-y-1.5">
+                  <Label className="flex items-center gap-2">
+                    Ảnh đại diện
+                    <Badge variant="secondary">
+                      {image.kind === "auto"
+                        ? isEdit
+                          ? "giữ ảnh hiện có"
+                          : "ảnh gốc"
+                        : image.kind === "none"
+                          ? "đã bỏ ảnh"
+                          : "ảnh mới"}
+                    </Badge>
+                  </Label>
+                  {effectiveImageSrc ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={effectiveImageSrc}
+                      alt=""
+                      className="max-h-40 w-full rounded-lg object-cover"
+                      onError={() => {
+                        if (image.kind === "url") {
+                          toast.error("Không tải được ảnh từ link — dùng lại ảnh gốc");
+                          setImageOverride({ kind: "auto" });
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className="flex h-24 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">
+                      {isEdit ? "Không đổi ảnh — giữ ảnh hiện có trên WP" : "Không có ảnh đại diện"}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Input
+                      placeholder="Dán link ảnh mới…"
+                      value={imageUrlInput}
+                      onChange={(e) => setImageUrlInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          applyImageUrl();
+                        }
+                      }}
+                    />
+                    <Button variant="outline" size="sm" onClick={applyImageUrl} disabled={!imageUrlInput.trim()}>
+                      Dùng link
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="max-w-56 text-xs"
+                      onChange={(e) => {
+                        applyImageFile(e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                    <Button variant="ghost" size="sm" onClick={() => setImageOverride({ kind: "none" })}>
+                      Bỏ ảnh
+                    </Button>
+                    {image.kind !== "auto" && (
+                      <Button variant="ghost" size="sm" onClick={() => setImageOverride({ kind: "auto" })}>
+                        {isEdit ? "Giữ ảnh hiện có" : "Khôi phục ảnh gốc"}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="wp-title">Tiêu đề (giữ nguyên từ bài gốc — sửa được)</Label>
+                  <Textarea id="wp-title" rows={2} value={title} onChange={(e) => setTitle(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-muted-foreground">Mô tả (description)</Label>
+                  <p className="line-clamp-4 text-sm text-muted-foreground">{preview.description || "(trống)"}</p>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="wp-content" className="text-muted-foreground">
+                      Nội dung (HTML — sửa được)
+                      {preview.parts > 1 && (
+                        <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">
+                          đã gộp {preview.parts} phần
+                        </span>
+                      )}
+                    </Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowContentPreview((v) => !v)}
+                    >
+                      {showContentPreview ? "Ẩn xem trước" : "Xem trước"}
+                    </Button>
+                  </div>
+                  <Textarea
+                    id="wp-content"
+                    rows={12}
+                    className="font-mono text-xs"
+                    value={content}
+                    onChange={(e) => setContent(e.target.value)}
+                  />
+                  {showContentPreview && (
+                    <div
+                      className="max-h-72 overflow-y-auto rounded-lg border bg-muted/30 p-3 text-sm [&_a]:text-blue-600 [&_h2]:mt-3 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:font-medium [&_img]:my-2 [&_img]:max-w-full [&_img]:rounded [&_p]:mb-2"
+                      dangerouslySetInnerHTML={{ __html: content || "<p>(trống)</p>" }}
+                    />
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {isEdit ? (
+                  <>Cập nhật bài WP hiện có — permalink không đổi.</>
                 ) : (
-                  "Đăng nháp"
-                )}
-              </Button>
-              <Button onClick={() => doPublish("publish")} disabled={loading || !title.trim()}>
-                {loading ? (
                   <>
-                    <Loader2 className="animate-spin" /> Đang đăng…
+                    Đăng vào category <span className="font-medium text-foreground">Story</span> — chọn{" "}
+                    <span className="font-medium text-foreground">Đăng nháp</span> (draft) hoặc{" "}
+                    <span className="font-medium text-foreground">Đăng luôn</span> (publish công khai ngay).
                   </>
-                ) : (
-                  "Đăng luôn"
                 )}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+              </p>
+              <DialogFooter className="gap-2 sm:gap-2">
+                <Button variant="outline" onClick={() => setPreview(null)} disabled={loading}>
+                  Cào lại
+                </Button>
+                <Button variant="secondary" onClick={() => doSubmit("draft")} disabled={loading || !title.trim()}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="animate-spin" /> {isEdit ? "Đang lưu…" : "Đang đăng…"}
+                    </>
+                  ) : isEdit ? (
+                    "Lưu (nháp)"
+                  ) : (
+                    "Đăng nháp"
+                  )}
+                </Button>
+                <Button onClick={() => doSubmit("publish")} disabled={loading || !title.trim()}>
+                  {loading ? (
+                    <>
+                      <Loader2 className="animate-spin" /> {isEdit ? "Đang cập nhật…" : "Đang đăng…"}
+                    </>
+                  ) : isEdit ? (
+                    "Cập nhật & Publish"
+                  ) : (
+                    "Đăng luôn"
+                  )}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }

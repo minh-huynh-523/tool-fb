@@ -35,7 +35,13 @@ export interface PostWithComment extends PostRow {
   commentStatus: CommentStatus | null;
   commentCounts: Partial<Record<CommentStatus, number>>;
   comments: CommentHistoryRow[]; // lịch sử comment của mình cho bài này (mới lên lịch → đã đăng/lỗi)
-  wp: { wp_post_id: string | null; wp_edit_url: string | null; wp_status: string | null; wp_permalink: string | null } | null;
+  wp: {
+    wp_post_id: string | null;
+    wp_edit_url: string | null;
+    wp_status: string | null;
+    wp_permalink: string | null;
+    source_url: string | null;
+  } | null;
 }
 
 // Row cũ chưa có wp_permalink (trước migration 0006) -> tự dựng link ?p=ID từ wp_post_id (vẫn dùng được).
@@ -168,7 +174,10 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
       .select('id, post_id, message, attachment_url, run_after, status, attempts, sent_at, error, created_at')
       .in('post_id', ids)
       .order('run_after', { ascending: true }),
-    db.from('scraped_article').select('post_id, wp_post_id, wp_edit_url, wp_status, wp_permalink').in('post_id', ids),
+    db
+      .from('scraped_article')
+      .select('post_id, wp_post_id, wp_edit_url, wp_status, wp_permalink, source_url')
+      .in('post_id', ids),
   ]);
 
   const byPost = new Map<string, Partial<Record<CommentStatus, number>>>();
@@ -189,12 +198,14 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
     wp_edit_url: string | null;
     wp_status: string | null;
     wp_permalink: string | null;
+    source_url: string | null;
   }[]) {
     wpByPost.set(s.post_id, {
       wp_post_id: s.wp_post_id,
       wp_edit_url: s.wp_edit_url,
       wp_status: s.wp_status,
       wp_permalink: resolvePermalink(s),
+      source_url: s.source_url,
     });
   }
 
@@ -220,6 +231,7 @@ export async function getPostWithComments(postDbId: string): Promise<{
     wp_edit_url: string | null;
     wp_status: string | null;
     wp_permalink: string | null;
+    source_url: string | null;
   } | null;
 } | null> {
   const db = createSupabaseAdmin();
@@ -229,7 +241,7 @@ export async function getPostWithComments(postDbId: string): Promise<{
     db.from('scheduled_comment').select('*').eq('post_id', postDbId).order('created_at', { ascending: false }),
     db
       .from('scraped_article')
-      .select('wp_post_id, wp_edit_url, wp_status, wp_permalink')
+      .select('wp_post_id, wp_edit_url, wp_status, wp_permalink, source_url')
       .eq('post_id', postDbId)
       .maybeSingle(),
   ]);
@@ -240,6 +252,7 @@ export async function getPostWithComments(postDbId: string): Promise<{
     wp_edit_url: string | null;
     wp_status: string | null;
     wp_permalink: string | null;
+    source_url: string | null;
   } | null;
   return {
     post: post as PostRow,

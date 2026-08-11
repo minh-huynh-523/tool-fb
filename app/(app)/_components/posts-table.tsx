@@ -25,6 +25,7 @@ type Row = PostRow & {
     wp_edit_url: string | null;
     wp_status: string | null;
     wp_permalink: string | null;
+    source_url: string | null;
   } | null;
 };
 
@@ -165,7 +166,12 @@ export function PostsTable({
                         postDbId={p.id}
                         existing={
                           p.wp
-                            ? { editUrl: p.wp.wp_edit_url, status: p.wp.wp_status, permalink: p.wp.wp_permalink }
+                            ? {
+                                editUrl: p.wp.wp_edit_url,
+                                status: p.wp.wp_status,
+                                permalink: p.wp.wp_permalink,
+                                sourceUrl: p.wp.source_url,
+                              }
                             : null
                         }
                         commentsInfo={{

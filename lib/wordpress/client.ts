@@ -83,6 +83,33 @@ export async function wpGetPostInfo(
   }
 }
 
+// wp.editPost -> sửa bài đã tồn tại (title/content/ảnh đại diện/status/category). KHÔNG set post_name
+// (giữ nguyên slug hiện có) để không phá permalink đã chia sẻ/lên lịch comment. thumbnailId "0" = gỡ ảnh
+// đại diện; undefined = giữ nguyên ảnh cũ. Trả về true/false theo WP.
+export async function wpEditPost(
+  site: WpSite,
+  postId: string,
+  input: {
+    title?: string;
+    contentHtml?: string;
+    excerpt?: string;
+    thumbnailId?: string;
+    categories?: string[];
+    status?: 'draft' | 'publish';
+  },
+): Promise<boolean> {
+  const { xmlrpcUrl: url, user, password } = site;
+  const content: Record<string, unknown> = {};
+  if (input.title !== undefined) content.post_title = input.title;
+  if (input.contentHtml !== undefined) content.post_content = input.contentHtml;
+  if (input.excerpt !== undefined) content.post_excerpt = input.excerpt;
+  if (input.thumbnailId !== undefined) content.post_thumbnail = Number(input.thumbnailId);
+  if (input.status !== undefined) content.post_status = input.status;
+  if (input.categories?.length) content.terms_names = { category: input.categories };
+  const ok = await call<boolean>(url, 'wp.editPost', [0, user, password, parseInt(postId, 10), content]);
+  return !!ok;
+}
+
 // wp.newPost -> tạo bài (mặc định draft, truyền status: 'publish' để đăng luôn). Trả về post id (string).
 export async function wpNewPostDraft(
   site: WpSite,

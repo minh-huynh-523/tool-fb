@@ -5,10 +5,14 @@ import { createSupabaseAdmin } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 
 // PATCH /api/competitors/[id] — cập nhật:
-//   { requestScrape: true }  -> đặt scrape_requested_at = now() (nút "Cào ngay"; worker laptop poll sẽ nhận)
+//   { requestScrape: true }  -> đặt scrape_requested_at = now() (nút "Cào ngay")
 //   { active: boolean }      -> bật/tắt theo dõi page
 //   { sheetCopied: true }    -> đánh dấu đã copy sang Sheet (set sheet_copied_at = now())
 // Route này KHÔNG chạy browser (Vercel không cào) — chỉ ghi cờ vào DB.
+//
+// LƯU Ý: từ khi chuyển sang GitHub Actions (.github/workflows/scrape-competitors.yml, cron 6h,
+// KHÔNG phải daemon), scrape_requested_at KHÔNG còn được đọc ở đâu nữa — "Cào ngay" không còn
+// tức thời. Muốn cào ngay thật: vào tab Actions trên GitHub, bấm "Run workflow" tay.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireUser();
   if (!auth.ok) return auth.res;

@@ -380,3 +380,23 @@ export async function getPromptTemplate(kind: 'main' = 'main'): Promise<PromptTe
   if (error) throw error;
   return (data as PromptTemplateRow) ?? null;
 }
+
+export interface ScraperStatus {
+  sessionExpired: boolean;
+  sessionExpiredAt: string | null;
+}
+
+// Trạng thái phiên FB dùng để cào đối thủ (bảng singleton scraper_status, migration 0021) — worker
+// (chạy ngoài Next.js) ghi, dashboard đọc để hiện banner yêu cầu đăng nhập lại (npm run fb-login).
+// Lỗi/thiếu row (migration chưa chạy) -> coi như OK thay vì throw, vì đây chỉ là banner phụ, không
+// nên làm sập layout của cả app.
+export async function getScraperStatus(): Promise<ScraperStatus> {
+  const db = createSupabaseAdmin();
+  const { data, error } = await db
+    .from('scraper_status')
+    .select('session_expired, session_expired_at')
+    .eq('key', 'global')
+    .maybeSingle();
+  if (error || !data) return { sessionExpired: false, sessionExpiredAt: null };
+  return { sessionExpired: data.session_expired, sessionExpiredAt: data.session_expired_at };
+}

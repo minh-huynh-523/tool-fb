@@ -1,14 +1,21 @@
 /**
- * Worker cào page đối thủ — chạy trên LAPTOP (không phải Vercel).
+ * Worker cào page đối thủ — KHÔNG chạy trên Vercel (không có Playwright).
  *
+ * Đường chạy CHÍNH THỨC (production): GitHub Actions, xem
+ * .github/workflows/scrape-competitors.yml — cron 6h, chạy `--once` rồi thoát (không phải daemon).
+ * Runner không tự đăng nhập được (cần người thật gõ mật khẩu/2FA vào Chrome headful) — sinh phiên
+ * ở máy có màn hình bất kỳ (`npm run fb-login`), đẩy vào secret `FB_SCRAPER_STATE` cho job đọc.
+ *
+ * Chạy tay / debug (bất kỳ máy nào, cần .env.local: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY):
  *   npx tsx --env-file=.env.local scripts/scrape-worker.ts            # daemon: cron 6h + poll đơn on-demand
  *   npx tsx --env-file=.env.local scripts/scrape-worker.ts --once     # cào tất cả page active 1 lần rồi thoát
  *   npx tsx --env-file=.env.local scripts/scrape-worker.ts --once <handle>   # cào đúng 1 handle (test)
  *   npx tsx --env-file=.env.local scripts/scrape-worker.ts --links    # CHỈ bóc link (mở permalink từng bài)
  *   npx tsx --env-file=.env.local scripts/scrape-worker.ts --dry <handle> --dump raw.json  # soi schema thô
  *
- * Cần .env.local: SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY + FB_SCRAPE_STORAGE_STATE.
- * Nhớ: bật VPN (nếu cần) + `caffeinate` để laptop không ngủ khi chạy daemon.
+ * Daemon (cron 6h + poll on-demand) vẫn dùng được để chạy tay/debug dài hơi ở máy bất kỳ, nhưng
+ * KHÔNG còn là đường production — "Cào ngay" trên dashboard chỉ ghi cờ `scrape_requested_at`,
+ * GitHub Actions không đọc cờ đó (xem app/api/competitors/[id]/route.ts).
  */
 import { createWorkerSupabase } from '../lib/fb-scraper/supabase';
 import { scrapeAllActive, processScrapeRequests, scrapePages } from '../lib/fb-scraper/worker';
@@ -97,7 +104,7 @@ async function main() {
   if (args.includes('--links')) {
     const { scrapePostLinks } = await import('../lib/fb-scraper/worker');
     const r = await scrapePostLinks();
-    console.log(`Xong: quét ${r.scanned} bài, ${r.found} bài có link.`);
+    console.log(`Xong: quét ${r.scanned} bài, ${r.found} bài có link, ${r.commentsAdded} comment bổ sung.`);
     process.exit(0);
   }
   if (args.includes('--once')) {

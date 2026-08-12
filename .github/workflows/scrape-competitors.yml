@@ -1,0 +1,55 @@
+name: Cào page đối thủ (FB)
+
+# Thay cho daemon `npm run worker` chạy laptop nhà — job chạy 1 lần rồi thoát (không phải
+# daemon), lịch tự lặp qua `schedule`. Xem lib/fb-scraper/ + scripts/scrape-worker.ts.
+#
+# CHÚ Ý IP: runner GitHub Actions chạy từ IP datacenter, không phải IP nhà dân — FB coi đây là
+# tín hiệu bot mạnh. Nếu hay bị chặn/soi hơn hẳn so với chạy ở laptop nhà, set secret
+# FB_SCRAPE_PROXY trỏ qua proxy dân dụng (residential).
+#
+# "Cào ngay" từ dashboard KHÔNG còn tức thời — nút vẫn ghi scrape_requested_at nhưng job này
+# không đọc cờ đó (chỉ cào TẤT CẢ page active mỗi lần chạy, xem scrapeAllActive trong worker.ts).
+# Muốn cào ngay: vào tab Actions trên GitHub, bấm "Run workflow" (workflow_dispatch dưới đây).
+on:
+  schedule:
+    - cron: "0 */6 * * *" # mỗi 6h — khớp cadence daemon cũ (worker.ts scrapeAllActive)
+  workflow_dispatch: {} # nút "Run workflow" trên GitHub UI = chạy tay ngay lập tức
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      # channel:'chrome' (KHÔNG phải Chromium bundled) — bắt buộc, xem comment trong
+      # lib/fb-scraper/browser.ts: Chromium bundled bị FB chặn thẳng ngay từ spike ban đầu.
+      - name: Cài Chrome thật cho Playwright
+        run: npx playwright install --with-deps chrome
+
+      # Phiên đăng nhập KHÔNG sinh được trên runner (cần người thật gõ mật khẩu/2FA vào Chrome
+      # headful). Sinh 1 lần ở máy có màn hình (bất kỳ máy nào — không cần laptop cố định):
+      #   npm run fb-login
+      #   gh secret set FB_SCRAPER_STATE < .fb-scraper/state.json
+      - name: Khôi phục phiên đăng nhập FB từ secret
+        run: |
+          mkdir -p .fb-scraper
+          printf '%s' "$FB_SCRAPER_STATE" > .fb-scraper/state.json
+        env:
+          FB_SCRAPER_STATE: ${{ secrets.FB_SCRAPER_STATE }}
+
+      # scrapeAllActive(): cào feed mọi page active + bóc link/comment permalink (lượt 2) trong
+      # cùng 1 lần chạy — đúng những gì daemon cron 6h làm trước đây.
+      - name: Cào tất cả page active
+        run: npx tsx scripts/scrape-worker.ts --once
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          FB_SCRAPE_PROXY: ${{ secrets.FB_SCRAPE_PROXY }}

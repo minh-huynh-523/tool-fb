@@ -1,36 +1,24 @@
 /**
  * Đăng nhập Facebook bằng TAY (acc phụ) rồi lưu storageState để worker tái dùng.
- * Chạy 1 lần trên laptop (cần màn hình). Cookie hết hạn (~vài tuần) thì chạy lại.
+ * Chạy 1 lần trên máy có màn hình. Cookie hết hạn (~vài tuần) thì chạy lại.
  *
  *   npx tsx scripts/fb-login.ts
  *
  * Lưu ý: KHÔNG dùng acc admin của page thật. Bật VPN trước nếu cần vào page bị geo-block.
  * File cookie lưu tại FB_SCRAPE_STORAGE_STATE (mặc định .fb-scraper/state.json) — đã gitignore.
+ * Cũng gọi được từ nút "Đăng nhập lại" trên dashboard — xem lib/fb-scraper/login.ts.
  */
-import { chromium } from 'playwright';
-import { createInterface } from 'node:readline';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { scraperConfig } from '../lib/fb-scraper/config';
-
-function waitForEnter(prompt: string): Promise<void> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((res) => rl.question(prompt, () => { rl.close(); res(); }));
-}
+import { runFbLogin } from '../lib/fb-scraper/login';
 
 async function main() {
-  const browser = await chromium.launch({ channel: 'chrome', headless: false });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'vi-VN' });
-  const page = await context.newPage();
-  await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded' });
-
-  console.log('\n>>> Đăng nhập ACC PHỤ trên cửa sổ Chrome (vượt hết challenge tới News Feed).');
-  await waitForEnter('>>> Xong thì bấm ENTER... ');
-
-  mkdirSync(dirname(scraperConfig.storageState), { recursive: true });
-  await context.storageState({ path: scraperConfig.storageState });
-  console.log(`\n✓ Đã lưu cookie → ${scraperConfig.storageState}`);
-  await browser.close();
+  console.log('\n>>> Đang mở Chrome — đăng nhập ACC PHỤ (vượt hết challenge tới News Feed).');
+  console.log('>>> Tự phát hiện đăng nhập xong, không cần bấm gì ở đây — chỉ thao tác trong cửa sổ Chrome.\n');
+  const result = await runFbLogin();
+  if (!result.ok) {
+    console.error(`✗ ${result.message}`);
+    process.exit(1);
+  }
+  console.log(`✓ ${result.message}`);
 }
 
 main().catch((e) => { console.error('Lỗi:', e); process.exit(1); });

@@ -12,7 +12,8 @@
 import { type BrowserContext } from 'playwright';
 import { normalizeContentLink } from '../fb-link';
 import { scraperConfig } from './config';
-import { BlockedError } from './client';
+import { BlockedError, SessionExpiredError } from './client';
+import { parseFeed, type ParsedComment } from './parse';
 
 const BLOCKED_MARKERS = [
   'bạn hiện không xem được nội dung này',
@@ -20,6 +21,9 @@ const BLOCKED_MARKERS = [
   "isn't available right now",
   'tạm thời bị chặn',
 ];
+
+// Phiên đăng nhập hết hạn — xem giải thích đầy đủ ở client.ts. Kiểm tra riêng, KHÁC BLOCKED_MARKERS.
+const LOGIN_WALL_MARKERS = ['bạn quên tài khoản ư?'];
 
 export interface PostPageLinks {
   links: string[];
@@ -39,6 +43,12 @@ export interface PostPageLinks {
    * chặn thì 0.
    */
   rendered: boolean;
+  /**
+   * Comment đọc được từ chính trang permalink (đầy đủ hơn preview trong feed — xem client.ts).
+   * Rỗng nếu không khớp được đúng post trong fragment (đổi schema / lệch id) — KHÔNG phải nghĩa
+   * là bài không có comment, chỉ là "không lấy thêm được gì mới" ở lượt này.
+   */
+  comments: ParsedComment[];
 }
 
 /**
@@ -62,19 +72,49 @@ export function readableUrl(permalink: string, handle?: string | null): string {
     : `https://www.facebook.com/watch/?v=${id}`;
 }
 
-/** Mở 1 bài, trả MỌI link nội dung thấy trong phần bài + comment. */
+/**
+ * Mở 1 bài, trả MỌI link nội dung thấy trong phần bài + comment, CỘNG THÊM comment đọc được từ
+ * trang permalink (đầy đủ hơn preview trong feed — xem lý do ở client.ts).
+ *
+ * Thu thập fragment y hệt collectFeed() ở client.ts: permalink cũng là "màn hình đầu tiên" nên
+ * phần lớn comment nhúng sẵn trong <script type="application/json">, không đi qua /api/graphql/ —
+ * bỏ qua bước đọc script nhúng thì fragments gần như rỗng.
+ */
 export async function linksFromPostPage(
   context: BrowserContext,
   permalink: string,
-  opts: { handle?: string | null } = {},
+  opts: { handle?: string | null; fbPostId?: string | null; pageIdHint?: string | null } = {},
 ): Promise<PostPageLinks> {
   const page = await context.newPage();
   const url = readableUrl(permalink, opts.handle);
+
+  const fragments: unknown[] = [];
+  page.on('response', async (res) => {
+    if (!res.url().includes('/api/graphql/')) return;
+    try {
+      const text = await res.text();
+      for (const line of text.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          fragments.push(JSON.parse(t));
+        } catch {
+          /* dòng không phải JSON, bỏ */
+        }
+      }
+    } catch {
+      /* body không đọc được */
+    }
+  });
+
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: scraperConfig.timeoutMs });
     await page.waitForTimeout(4000); // chờ comment render (video lười hơn bài thường)
 
     const head = (await page.locator('body').innerText().catch(() => '')).slice(0, 2000).toLowerCase();
+    if (LOGIN_WALL_MARKERS.some((m) => head.includes(m))) {
+      throw new SessionExpiredError(`Phiên đăng nhập FB đã hết hạn khi mở bài ${url} — chạy lại: npm run fb-login`);
+    }
     if (BLOCKED_MARKERS.some((m) => head.includes(m))) {
       throw new BlockedError(`Bị chặn khi mở bài ${url}`);
     }
@@ -96,7 +136,29 @@ export async function linksFromPostPage(
       const u = normalizeContentLink(h);
       if (u && !links.includes(u)) links.push(u);
     }
-    return { links, rendered: articles > 0 };
+
+    // JSON nhúng sẵn lần load đầu (xem docstring hàm) — gom SAU khi đã chờ render xong.
+    const inlineJson: string[] = await page
+      .$$eval('script[type="application/json"]', (els) => els.map((e) => e.textContent ?? ''))
+      .catch(() => []);
+    for (const raw of inlineJson) {
+      try {
+        fragments.push(JSON.parse(raw));
+      } catch {
+        /* không phải JSON hợp lệ, bỏ */
+      }
+    }
+
+    // Tìm đúng post đang mở trong fragment (permalink có thể lẫn fragment "bài gợi ý" sidebar với
+    // post_id khác — không gộp bừa). Không khớp được thì trả comments rỗng, không throw: phần bóc
+    // link DOM ở trên vẫn phải chạy độc lập với bước này.
+    let comments: ParsedComment[] = [];
+    if (opts.fbPostId) {
+      const { posts } = parseFeed(fragments, opts.pageIdHint);
+      comments = posts.find((p) => p.fbPostId === opts.fbPostId)?.comments ?? [];
+    }
+
+    return { links, rendered: articles > 0, comments };
   } finally {
     await page.close();
   }

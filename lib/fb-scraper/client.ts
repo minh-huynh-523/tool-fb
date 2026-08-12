@@ -19,11 +19,29 @@ const BLOCKED_MARKERS = [
 ];
 
 /**
+ * Phiên đăng nhập (.fb-scraper/state.json) đã hết hạn — FB trả "màn login wall" (chỉ hiện 1 bài
+ * công khai) thay vì feed thật. Bug thật đã gặp: page vẫn active, collectFeed() vẫn "chạy được"
+ * (không khớp BLOCKED_MARKERS) nhưng chỉ ra đúng 1 bài — âm thầm ghi dữ liệu THIẾU vào DB như thể
+ * đó là toàn bộ feed. Marker riêng, KHÁC BLOCKED_MARKERS: đây là lỗi phiên (sửa được bằng đăng nhập
+ * lại), không phải page bị chặn (sửa bằng VPN/tắt page).
+ */
+const LOGIN_WALL_MARKERS = ['bạn quên tài khoản ư?'];
+
+/**
  * Lỗi "chắc chắn không cào được" (geo-block / audience / bot-detect) — khác lỗi tạm thời
  * (mạng chập, timeout). Worker dựa vào đây để TẮT page ngay thay vì thử lại mỗi 6h.
  */
 export class BlockedError extends Error {
   readonly blocked = true;
+}
+
+/**
+ * Phiên FB dùng để cào đã hết hạn — ảnh hưởng CẢ BATCH (mọi page dùng chung 1 browser context/
+ * cookie), không phải lỗi riêng của 1 page. Worker dựa vào đây để: dừng cả lượt ngay (cào tiếp
+ * page khác chỉ tổ phí thời gian), KHÔNG đốt fail_count/tắt page, và báo FE yêu cầu đăng nhập lại.
+ */
+export class SessionExpiredError extends Error {
+  readonly sessionExpired = true;
 }
 
 export interface ScrapedPage {
@@ -63,8 +81,12 @@ async function collectFeed(
   await page.goto(competitorPageUrl(handle), { waitUntil: 'domcontentloaded', timeout: scraperConfig.timeoutMs });
   await page.waitForTimeout(3000);
 
-  // Kiểm tra bị chặn NGAY (trước khi phí công scroll).
+  // Kiểm tra bị chặn / hết phiên NGAY (trước khi phí công scroll).
   const head = (await page.locator('body').innerText().catch(() => '')).slice(0, 3000).toLowerCase();
+  if (LOGIN_WALL_MARKERS.some((m) => head.includes(m))) {
+    await page.close();
+    throw new SessionExpiredError(`Phiên đăng nhập FB đã hết hạn khi mở "${handle}" — chạy lại: npm run fb-login`);
+  }
   if (BLOCKED_MARKERS.some((m) => head.includes(m))) {
     await page.close();
     throw new BlockedError(`Bị chặn khi mở "${handle}" (bot-detect/geo/audience) — thử VPN nước khác hoặc kiểm tra cookie`);
@@ -185,7 +207,9 @@ export interface ScrapeManyOpts {
 /** Cào nhiều page trong CÙNG 1 browser (tiết kiệm, nghỉ delayMs giữa các page). */
 export async function scrapeMany(
   handles: string[],
-  onEach: (r: ScrapedPage | { handle: string; error: string; blocked: boolean }) => Promise<void>,
+  onEach: (
+    r: ScrapedPage | { handle: string; error: string; blocked: boolean; sessionExpired?: boolean },
+  ) => Promise<void>,
   opts: ScrapeManyOpts = {},
 ): Promise<void> {
   const { browser, context } = await launchStealth();
@@ -196,7 +220,11 @@ export async function scrapeMany(
         const r = await collectFeed(context, handle, opts);
         await onEach(r);
       } catch (e) {
-        await onEach({ handle, error: (e as Error).message, blocked: e instanceof BlockedError });
+        const sessionExpired = e instanceof SessionExpiredError;
+        await onEach({ handle, error: (e as Error).message, blocked: e instanceof BlockedError, sessionExpired });
+        // Phiên đã chết là chuyện của CẢ browser context (cùng cookie cho mọi page) — cào tiếp
+        // page khác trong CÙNG phiên chỉ tổ phí thời gian (và dễ bị soi thêm), dừng cả batch luôn.
+        if (sessionExpired) break;
       }
       if (i < handles.length - 1) await new Promise((r) => setTimeout(r, scraperConfig.delayMs));
     }

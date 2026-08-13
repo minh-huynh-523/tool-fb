@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Deno runtime (Supabase Edge Functions) — cú pháp riêng (npm:/jsr: specifier, global Deno,
+    // import .ts có đuôi) mà parser/rule của Next.js/Node không hiểu, không phải phần Next app.
+    "supabase/functions/**",
   ]),
 ]);
 

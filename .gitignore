@@ -46,3 +46,6 @@ api-dump/
 # FB scraper spike (throwaway: cookie phiên đăng nhập + output cào — TUYỆT ĐỐI không commit)
 scripts/spike/
 *state*.json
+
+# Supabase CLI local cache (project ref/pooler URL sau `supabase link` — máy-cụ-thể, không commit)
+supabase/.temp/

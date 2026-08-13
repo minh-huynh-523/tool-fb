@@ -8,9 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatusBadge } from "../../_components/status-badge";
 import { AddCommentForm } from "../../_components/add-comment-form";
+import { AutoPublishBadge } from "../../_components/auto-publish-badge";
 import { DeleteCommentButton } from "../../_components/delete-comment-button";
 import { EditCommentButton } from "../../_components/edit-comment-button";
 import { CollapsibleText } from "../../_components/collapsible-text";
+import { RetryAutoPublishButton } from "../../_components/retry-auto-publish-button";
 import { WordpressPostButton } from "../../_components/wordpress-post-button";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +21,7 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const data = await getPostWithComments(id);
   if (!data) notFound();
-  const { post, comments, scraped } = data;
+  const { post, comments, scraped, autoPublish } = data;
   // Comment thật trên FB (chỉ với bài đã đăng — bài lên lịch chưa có comment).
   const live = post.is_published ? await getLivePostComments(post.fb_post_id, post.page_id) : null;
 
@@ -46,8 +48,10 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
               <span>{post.media_type ?? "post"}</span>
               <span>·</span>
               <span>{formatVN(post.display_time ?? post.fb_created_at)}</span>
+              <AutoPublishBadge autoPublish={autoPublish} />
             </div>
             <div className="flex shrink-0 items-center gap-2">
+              {autoPublish?.status === "FAILED" && <RetryAutoPublishButton postDbId={post.id} />}
               <WordpressPostButton
                 postDbId={post.id}
                 existing={

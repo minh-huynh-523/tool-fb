@@ -1,5 +1,6 @@
 import { getPromptTemplate } from "@/lib/queries";
 import { PromptTemplateForm } from "../_components/prompt-template-form";
+import { RunAutoPublishButton } from "../_components/run-auto-publish-button";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,17 @@ export default async function PromptsPage() {
       <div>
         <h1 className="text-2xl font-semibold">Mẫu prompt</h1>
         <p className="mt-1 text-sm text-neutral-500">Sửa ở đây, không cần deploy lại.</p>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-900">
+        <div>
+          <h2 className="text-lg font-medium">Auto-publish</h2>
+          <p className="text-sm text-neutral-500">
+            Bình thường chạy tự động qua cron (<code>sync-pages</code> enqueue, rồi <code>wp-content</code>/
+            <code>wp-publish</code> xử lý) — bấm nút này để chạy ngay cả 3 bước, không cần đợi lịch cron.
+          </p>
+        </div>
+        <RunAutoPublishButton />
       </div>
 
       <div className="space-y-3">

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, FileText, LayoutDashboard, Link2, Menu, Sparkles, Swords, X } from "lucide-react";
+import { Bot, Building2, FileText, LayoutDashboard, Link2, Menu, Sparkles, Swords, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LogoutButton } from "./logout-button";
 import { WpNeededBadge } from "./wp-needed-badge";
@@ -14,6 +14,9 @@ const NAV = [
   { href: "/posts", label: "Bài post", icon: FileText },
   // Ngay dưới "Bài post": đây là việc phát sinh TỪ bài post, và là thứ đáng nhìn thứ hai khi mở app.
   { href: WP_NEEDED_HREF, label: "Cần đăng link WP", icon: Link2 },
+  // Ngay dưới "Cần đăng link WP": bài đủ ngưỡng được TỰ ĐỘNG đưa vào hàng đợi sinh nội dung
+  // (Gemini) rồi tự đăng WP (lib/auto-publish.ts) — trang này theo dõi trạng thái từng bước.
+  { href: "/link-comments", label: "Auto-publish WP", icon: Bot },
   { href: "/pages", label: "Pages", icon: Building2 },
   { href: "/competitors", label: "Đối thủ", icon: Swords },
   { href: "/prompts", label: "Mẫu prompt", icon: Sparkles },

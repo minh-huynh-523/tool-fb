@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { syncAllPages } from "@/lib/sync";
 import { processDueComments } from "@/lib/comments";
 import { backupPostImages } from "@/lib/post-image-backup";
+import { enqueueWpContentCandidates } from "@/lib/auto-publish";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -11,6 +12,9 @@ export const maxDuration = 60;
 // một cron duy nhất khép kín luồng: reel lên sóng -> đổi id -> comment đăng đúng bài.
 // Backup ảnh FB (post.media_url -> Supabase Storage, xem lib/post-image-backup.ts) chạy SAU sync
 // (mới biết bài nào là bài mới) — lỗi ở đây KHÔNG được chặn comment tới hạn, chỉ best-effort.
+// Enqueue auto-publish (lib/auto-publish.ts) cũng chạy ở đây: chỉ SELECT + INSERT rẻ, không gọi
+// Gemini/WordPress/FB — bài đủ ngưỡng được đẩy vào wp_content_queue, 2 cron riêng
+// (wp-content/wp-publish) mới thật sự xử lý (đắt hơn, cần maxDuration/lịch riêng).
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
@@ -30,8 +34,12 @@ async function run(req: NextRequest) {
       console.error("[image-backup] lỗi:", (e as Error).message);
       return null;
     });
+    const autoPublishEnqueued = await enqueueWpContentCandidates().catch((e) => {
+      console.error("[auto-publish] enqueue lỗi:", (e as Error).message);
+      return null;
+    });
     const comments = await processDueComments();
-    return NextResponse.json({ ok: true, sync: results, imageBackup, comments });
+    return NextResponse.json({ ok: true, sync: results, imageBackup, autoPublishEnqueued, comments });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

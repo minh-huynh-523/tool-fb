@@ -21,6 +21,18 @@ export function startOfTodayVNISO(): string {
   return new Date(utcMs).toISOString();
 }
 
+// Mốc 1 GIỜ CỤ THỂ của HÔM NAY theo giờ VN (UTC+7) -> ISO (UTC). VD hourTodayVNISO(12) = 12h
+// trưa hôm nay. Cùng idiom với startOfTodayVNISO(), chỉ khác giờ trong ngày thay vì luôn 00:00.
+export function hourTodayVNISO(hour: number): string {
+  const now = new Date();
+  const vn = new Date(now.getTime() + 7 * 3600 * 1000); // dịch sang giờ VN
+  const y = vn.getUTCFullYear();
+  const m = vn.getUTCMonth();
+  const d = vn.getUTCDate();
+  const utcMs = Date.UTC(y, m, d, hour, 0, 0) - 7 * 3600 * 1000; // giờ cắt hôm nay (VN) quy về UTC
+  return new Date(utcMs).toISOString();
+}
+
 // Mốc đầu ngày (00:00 giờ VN) của 1 ngày "YYYY-MM-DD" -> ISO (UTC).
 export function startOfDayVNISO(yyyyMmDd: string): string {
   const [y, m, d] = yyyyMmDd.split('-').map(Number);

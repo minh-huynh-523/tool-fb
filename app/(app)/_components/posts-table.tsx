@@ -8,12 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AddCommentForm } from "./add-comment-form";
+import { AutoPublishBadge } from "./auto-publish-badge";
 import { CollapsibleText } from "./collapsible-text";
 import { DeleteCommentButton } from "./delete-comment-button";
 import { DismissWpButton } from "./dismiss-wp-button";
 import { EditCommentButton } from "./edit-comment-button";
+import { RetryAutoPublishButton } from "./retry-auto-publish-button";
 import { StatusBadge } from "./status-badge";
 import { WordpressPostButton } from "./wordpress-post-button";
+import type { AutoPublishStatus } from "@/lib/queries";
 import type { CommentHistoryRow, CommentStatus, PostRow } from "@/lib/types";
 
 type Row = PostRow & {
@@ -27,6 +30,7 @@ type Row = PostRow & {
     wp_permalink: string | null;
     source_url: string | null;
   } | null;
+  autoPublish: AutoPublishStatus | null;
 };
 
 function TypeBadge({ published }: { published: boolean }) {
@@ -148,6 +152,7 @@ export function PostsTable({
                       {p.commentStatus === "FAILED" && (
                         <div className="text-xs text-red-600">Gửi lỗi — thử lại</div>
                       )}
+                      <AutoPublishBadge autoPublish={p.autoPublish} />
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
@@ -182,6 +187,7 @@ export function PostsTable({
                         hasCaption={!!p.message?.trim()}
                       />
                       {dismissable && <DismissWpButton postDbId={p.id} dismissed={!!p.wp_dismissed_at} />}
+                      {p.autoPublish?.status === "FAILED" && <RetryAutoPublishButton postDbId={p.id} />}
                       <Button size="sm" onClick={() => setOpenId(isOpen ? null : p.id)}>
                         {isOpen ? <X /> : <MessageSquarePlus />}
                         {isOpen ? "Đóng" : "Comment"}

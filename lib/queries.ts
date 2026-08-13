@@ -31,6 +31,17 @@ export async function listPages(): Promise<SafePage[]> {
   return (data ?? []) as SafePage[];
 }
 
+// Trạng thái auto-publish (lib/auto-publish.ts, migration 0024) cho 1 post — 'publish' đi trước
+// 'content' vì nó nằm ở giai đoạn sau trong pipeline: có hàng ở wp_publish_queue thì hàng
+// wp_content_queue chỉ còn là lịch sử (đã DONE), không phải trạng thái "đang treo" cần hiện.
+export interface AutoPublishStatus {
+  stage: 'content' | 'publish';
+  status: string; // content: PENDING|PROCESSING|DONE|FAILED — publish: PENDING|PROCESSING|PUBLISHED|FAILED
+  attempts: number;
+  error: string | null;
+  permalink: string | null; // chỉ có ở stage 'publish'
+}
+
 export interface PostWithComment extends PostRow {
   commentStatus: CommentStatus | null;
   commentCounts: Partial<Record<CommentStatus, number>>;
@@ -42,6 +53,7 @@ export interface PostWithComment extends PostRow {
     wp_permalink: string | null;
     source_url: string | null;
   } | null;
+  autoPublish: AutoPublishStatus | null;
 }
 
 // Row cũ chưa có wp_permalink (trước migration 0006) -> tự dựng link ?p=ID từ wp_post_id (vẫn dùng được).
@@ -165,10 +177,10 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
   });
   if (!list.length) return { rows: [], total, page, pageSize };
 
-  // Lịch sử comment (của mình) + bài WP cho các post của trang hiện tại — 2 query độc lập,
-  // chạy SONG SONG để tiết kiệm 1 round-trip Supabase.
+  // Lịch sử comment (của mình) + bài WP + trạng thái auto-publish cho các post của trang hiện
+  // tại — 4 query độc lập, chạy SONG SONG để tiết kiệm round-trip Supabase.
   const ids = list.map((p) => p.id);
-  const [{ data: comments }, { data: scraped }] = await Promise.all([
+  const [{ data: comments }, { data: scraped }, { data: contentQ }, { data: publishQ }] = await Promise.all([
     db
       .from('scheduled_comment')
       .select('id, post_id, message, attachment_url, run_after, status, attempts, sent_at, error, created_at')
@@ -178,6 +190,8 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
       .from('scraped_article')
       .select('post_id, wp_post_id, wp_edit_url, wp_status, wp_permalink, source_url')
       .in('post_id', ids),
+    db.from('wp_content_queue').select('post_id, status, attempts, error').in('post_id', ids),
+    db.from('wp_publish_queue').select('post_id, status, attempts, error, permalink').in('post_id', ids),
   ]);
 
   const byPost = new Map<string, Partial<Record<CommentStatus, number>>>();
@@ -209,12 +223,29 @@ export async function listPostsWithCommentStatus(filter: PostFilter): Promise<Li
     });
   }
 
+  // 'publish' đi trước 'content': có hàng ở wp_publish_queue thì hàng wp_content_queue chỉ còn
+  // là lịch sử (đã DONE) — trạng thái "đang treo" cần hiện luôn là hàng ở giai đoạn sau.
+  const autoPublishByPost = new Map<string, AutoPublishStatus>();
+  for (const c of (contentQ ?? []) as { post_id: string; status: string; attempts: number; error: string | null }[]) {
+    autoPublishByPost.set(c.post_id, { stage: 'content', status: c.status, attempts: c.attempts, error: c.error, permalink: null });
+  }
+  for (const p of (publishQ ?? []) as {
+    post_id: string;
+    status: string;
+    attempts: number;
+    error: string | null;
+    permalink: string | null;
+  }[]) {
+    autoPublishByPost.set(p.post_id, { stage: 'publish', status: p.status, attempts: p.attempts, error: p.error, permalink: p.permalink });
+  }
+
   const rows: PostWithComment[] = list.map((p) => {
     const counts = byPost.get(p.id) ?? {};
     return {
       ...p,
       commentStatus: summarize(counts),
       commentCounts: counts,
+      autoPublish: autoPublishByPost.get(p.id) ?? null,
       comments: commentsByPost.get(p.id) ?? [],
       wp: wpByPost.get(p.id) ?? null,
     };
@@ -233,18 +264,22 @@ export async function getPostWithComments(postDbId: string): Promise<{
     wp_permalink: string | null;
     source_url: string | null;
   } | null;
+  autoPublish: AutoPublishStatus | null;
 } | null> {
   const db = createSupabaseAdmin();
-  // 3 query độc lập (cùng key postDbId) — chạy song song, tiết kiệm 2 round-trip.
-  const [{ data: post, error }, { data: comments }, { data: scraped }] = await Promise.all([
-    db.from('post').select(POST_COLUMNS).eq('id', postDbId).maybeSingle(),
-    db.from('scheduled_comment').select('*').eq('post_id', postDbId).order('created_at', { ascending: false }),
-    db
-      .from('scraped_article')
-      .select('wp_post_id, wp_edit_url, wp_status, wp_permalink, source_url')
-      .eq('post_id', postDbId)
-      .maybeSingle(),
-  ]);
+  // 5 query độc lập (cùng key postDbId) — chạy song song, tiết kiệm round-trip.
+  const [{ data: post, error }, { data: comments }, { data: scraped }, { data: contentQ }, { data: publishQ }] =
+    await Promise.all([
+      db.from('post').select(POST_COLUMNS).eq('id', postDbId).maybeSingle(),
+      db.from('scheduled_comment').select('*').eq('post_id', postDbId).order('created_at', { ascending: false }),
+      db
+        .from('scraped_article')
+        .select('wp_post_id, wp_edit_url, wp_status, wp_permalink, source_url')
+        .eq('post_id', postDbId)
+        .maybeSingle(),
+      db.from('wp_content_queue').select('status, attempts, error').eq('post_id', postDbId).maybeSingle(),
+      db.from('wp_publish_queue').select('status, attempts, error, permalink').eq('post_id', postDbId).maybeSingle(),
+    ]);
   if (error) throw error;
   if (!post) return null;
   const s = scraped as {
@@ -254,11 +289,110 @@ export async function getPostWithComments(postDbId: string): Promise<{
     wp_permalink: string | null;
     source_url: string | null;
   } | null;
+  // 'publish' đi trước 'content' — cùng lý do với listPostsWithCommentStatus.
+  const pubRow = publishQ as { status: string; attempts: number; error: string | null; permalink: string | null } | null;
+  const contRow = contentQ as { status: string; attempts: number; error: string | null } | null;
+  const autoPublish: AutoPublishStatus | null = pubRow
+    ? { stage: 'publish', status: pubRow.status, attempts: pubRow.attempts, error: pubRow.error, permalink: pubRow.permalink }
+    : contRow
+      ? { stage: 'content', status: contRow.status, attempts: contRow.attempts, error: contRow.error, permalink: null }
+      : null;
   return {
     post: post as PostRow,
+    autoPublish,
     comments: (comments ?? []) as ScheduledCommentRow[],
     scraped: s ? { ...s, wp_permalink: resolvePermalink(s) } : null,
   };
+}
+
+export interface AutoPublishQueueRow extends AutoPublishStatus {
+  postId: string;
+  createdAt: string;
+  post: { id: string; message: string | null; media_url: string | null; page_id: string } | null;
+}
+
+export interface ListAutoPublishQueueResult {
+  rows: AutoPublishQueueRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+// Trang /link-comments — theo dõi hàng đợi auto-publish (lib/auto-publish.ts, migration 0024)
+// xuyên suốt mọi bài: bài nào đang chờ/đang sinh nội dung Gemini, bài nào đang chờ/đã đăng WP,
+// bài nào lỗi. Gộp wp_content_queue + wp_publish_queue theo post_id, ưu tiên hàng 'publish' (giai
+// đoạn sau) — cùng logic precedence với listPostsWithCommentStatus/getPostWithComments ở trên.
+// Merge ở JS vì PostgREST không UNION được; 2 bảng còn nhỏ (auto-publish mới ra) nên fetch hết
+// rồi paginate trong JS, chưa cần UNION SQL.
+export async function listAutoPublishQueue(filter: {
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}): Promise<ListAutoPublishQueueResult> {
+  const db = createSupabaseAdmin();
+  const page = Math.max(1, filter.page ?? 1);
+  const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 20));
+
+  const [{ data: contentRows, error: cErr }, { data: publishRows, error: pErr }] = await Promise.all([
+    db.from('wp_content_queue').select('post_id, status, attempts, error, created_at').order('created_at', { ascending: false }),
+    db
+      .from('wp_publish_queue')
+      .select('post_id, status, attempts, error, permalink, created_at')
+      .order('created_at', { ascending: false }),
+  ]);
+  if (cErr) throw cErr;
+  if (pErr) throw pErr;
+
+  const merged = new Map<string, AutoPublishQueueRow>();
+  for (const c of (contentRows ?? []) as { post_id: string; status: string; attempts: number; error: string | null; created_at: string }[]) {
+    merged.set(c.post_id, {
+      postId: c.post_id,
+      post: null,
+      stage: 'content',
+      status: c.status,
+      attempts: c.attempts,
+      error: c.error,
+      permalink: null,
+      createdAt: c.created_at,
+    });
+  }
+  for (const p of (publishRows ?? []) as {
+    post_id: string;
+    status: string;
+    attempts: number;
+    error: string | null;
+    permalink: string | null;
+    created_at: string;
+  }[]) {
+    merged.set(p.post_id, {
+      postId: p.post_id,
+      post: null,
+      stage: 'publish',
+      status: p.status,
+      attempts: p.attempts,
+      error: p.error,
+      permalink: p.permalink,
+      createdAt: p.created_at,
+    });
+  }
+
+  let rows = Array.from(merged.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  if (filter.status) rows = rows.filter((r) => r.status === filter.status);
+  const total = rows.length;
+  const offset = (page - 1) * pageSize;
+  rows = rows.slice(offset, offset + pageSize);
+
+  if (rows.length) {
+    const ids = rows.map((r) => r.postId);
+    const { data: posts, error: postErr } = await db.from('post').select('id, message, media_url, page_id').in('id', ids);
+    if (postErr) throw postErr;
+    const postById = new Map(
+      ((posts ?? []) as { id: string; message: string | null; media_url: string | null; page_id: string }[]).map((p) => [p.id, p]),
+    );
+    for (const r of rows) r.post = postById.get(r.postId) ?? null;
+  }
+
+  return { rows, total, page, pageSize };
 }
 
 // Comment THẬT của bài lấy trực tiếp từ Facebook (dùng ở trang chi tiết). Fail-mềm nếu FB lỗi.

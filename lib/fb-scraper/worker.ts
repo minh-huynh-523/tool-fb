@@ -8,6 +8,7 @@ import { BlockedError, SessionExpiredError, scrapeMany, type ScrapedPage, type S
 import { launchStealth } from './browser';
 import { linksFromPostPage, randomDelayMs } from './post-links';
 import { scraperConfig } from './config';
+import { generatePart2Fallbacks } from './part2-fallback';
 import type { ParsedComment } from './parse';
 import type { CompetitorPageRow } from '../types';
 
@@ -335,6 +336,9 @@ export async function scrapeAllActive(db = createWorkerSupabase()): Promise<void
   // Lượt 2 chạy SAU khi feed xong: cần bài đã nằm trong DB mới biết permalink nào phải mở.
   // Lỗi ở đây không được kéo đổ cả lượt cào — dữ liệu feed đã ghi rồi.
   await scrapePostLinks(db).catch((e) => console.error('[link] lỗi:', (e as Error).message));
+  // Part 2 fallback chạy SAU CÙNG: chỉ lúc này mới biết chắc bài có comment của page hay không
+  // (comments_scanned_at vừa được set ở lượt 2).
+  await generatePart2Fallbacks(db).catch((e) => console.error('[part2] lỗi:', (e as Error).message));
 }
 
 /** Xử lý đơn "Cào ngay" (nút trên Vercel set scrape_requested_at). Poll gọi hàm này. */
@@ -353,6 +357,7 @@ export async function processScrapeRequests(db = createWorkerSupabase()): Promis
     // Nút "Cào ngay" luôn lấy bài mới nhất trong 1 ngày, bất kể FB_SCRAPE_MAX_AGE_HOURS của cron.
     await scrapePages(db, due, { maxAgeHours: 24 });
     await scrapePostLinks(db).catch((e) => console.error('[link] lỗi:', (e as Error).message));
+    await generatePart2Fallbacks(db).catch((e) => console.error('[part2] lỗi:', (e as Error).message));
   }
   return due.length;
 }

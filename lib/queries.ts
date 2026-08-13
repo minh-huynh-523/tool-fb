@@ -342,7 +342,8 @@ const COMPETITOR_POST_COLUMNS = `
   id, competitor_page_id, fb_post_id, permalink, caption, caption_link_urls, comment_link_urls,
   links_scanned_at, media_type, media_url, fb_created_at, raw, scraped_at, created_at,
   sheet_copied_at,
-  story_analysis, prompt_image, prompt_video, prompt_model, prompt_at, prompt_error
+  story_analysis, prompt_image, prompt_video, prompt_model, prompt_at, prompt_error,
+  part2_generated, part2_generated_at, part2_generated_error
 `;
 
 export interface CompetitorPostWithComments extends CompetitorPostRow {
@@ -373,8 +374,9 @@ export async function getCompetitorPageWithPosts(id: string): Promise<Competitor
   return { page: page as CompetitorPageRow, posts: mapped };
 }
 
-// Mega-prompt gửi Gemini. Null = migration 0009 chưa chạy hoặc chưa seed.
-export async function getPromptTemplate(kind: 'main' = 'main'): Promise<PromptTemplateRow | null> {
+// Prompt gửi Gemini ('main' = mega-prompt ảnh/video, 'part2' = fallback Part 2, xem 0022).
+// Null = migration tương ứng chưa chạy hoặc chưa seed.
+export async function getPromptTemplate(kind: 'main' | 'part2' = 'main'): Promise<PromptTemplateRow | null> {
   const db = createSupabaseAdmin();
   const { data, error } = await db.from('prompt_template').select('*').eq('kind', kind).maybeSingle();
   if (error) throw error;

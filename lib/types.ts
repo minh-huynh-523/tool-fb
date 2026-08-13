@@ -132,12 +132,18 @@ export interface CompetitorPostRow {
   prompt_at: string | null;
   prompt_error: string | null;
   // prompt_raw CỐ Ý không có ở đây: rất dài, chỉ trả kèm trong response POST khi cần "Xem bản gốc".
+  // Part 2 fallback do Gemini sinh từ caption (0022) — CHỈ dùng khi bài không có comment nào của
+  // page (xem lib/part2.ts). part2_generated_at set cả khi lỗi, để worker khỏi retry vô hạn.
+  part2_generated: string | null;
+  part2_generated_at: string | null;
+  part2_generated_error: string | null;
 }
 
-// Mega-prompt gửi Gemini — sửa được trong app tại /prompts (0009).
+// Prompt gửi Gemini — sửa được trong app tại /prompts (0009 + 0022).
+// 'main' = mega-prompt ảnh/video. 'part2' = fallback sinh Part 2 khi bài không có comment của page.
 export interface PromptTemplateRow {
   id: string;
-  kind: 'main';
+  kind: 'main' | 'part2';
   label: string;
   body: string;
   created_at: string;

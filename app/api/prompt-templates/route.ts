@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 const MAX_BODY = 40_000;
 
-const VALID_KINDS = new Set(["main", "part2"]);
+const VALID_KINDS = new Set(["main", "part2", "wp_article"]);
 
 // GET /api/prompt-templates — đọc mọi mẫu prompt (mega-prompt 'main' + fallback 'part2')
 export async function GET() {
@@ -52,7 +52,7 @@ export async function PUT(req: NextRequest) {
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) {
-    const migration = kind === "part2" ? "0022" : "0009";
+    const migration = kind === "part2" ? "0022" : kind === "wp_article" ? "0023" : "0009";
     return NextResponse.json({ error: `Chưa có mẫu prompt — migration ${migration} đã chạy chưa?` }, { status: 404 });
   }
   return NextResponse.json({ template: data });

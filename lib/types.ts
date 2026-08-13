@@ -37,6 +37,11 @@ export interface PostRow {
   raw: unknown;
   synced_at: string;
   created_at: string;
+  // Bản backup ảnh FB (media_url) trên Supabase Storage — tải lúc sync (0023), vì link CDN của FB
+  // hay hết hạn/chặn hotlink. Dùng làm ảnh đại diện khi "Tạo bài WP" từ caption FB.
+  image_backup_url: string | null;
+  image_backup_at: string | null; // đã thử backup chưa (set cả khi lỗi)
+  image_backup_error: string | null;
 }
 
 export interface ScrapedArticleRow {
@@ -139,11 +144,12 @@ export interface CompetitorPostRow {
   part2_generated_error: string | null;
 }
 
-// Prompt gửi Gemini — sửa được trong app tại /prompts (0009 + 0022).
-// 'main' = mega-prompt ảnh/video. 'part2' = fallback sinh Part 2 khi bài không có comment của page.
+// Prompt gửi Gemini — sửa được trong app tại /prompts (0009 + 0022 + 0023).
+// 'main' = mega-prompt ảnh/video (bài đối thủ). 'part2' = fallback sinh Part 2 khi bài đối thủ
+// không có comment của page. 'wp_article' = sinh bài WordPress từ caption FB + Part 2 (bài mình).
 export interface PromptTemplateRow {
   id: string;
-  kind: 'main' | 'part2';
+  kind: 'main' | 'part2' | 'wp_article';
   label: string;
   body: string;
   created_at: string;

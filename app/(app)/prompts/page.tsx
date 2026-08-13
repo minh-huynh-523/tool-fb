@@ -4,7 +4,11 @@ import { PromptTemplateForm } from "../_components/prompt-template-form";
 export const dynamic = "force-dynamic";
 
 export default async function PromptsPage() {
-  const [main, part2] = await Promise.all([getPromptTemplate("main"), getPromptTemplate("part2")]);
+  const [main, part2, wpArticle] = await Promise.all([
+    getPromptTemplate("main"),
+    getPromptTemplate("part2"),
+    getPromptTemplate("wp_article"),
+  ]);
 
   return (
     <div className="space-y-10">
@@ -40,6 +44,22 @@ export default async function PromptsPage() {
           <div className="rounded-2xl border border-dashed border-neutral-300 p-10 text-center text-neutral-400 dark:border-neutral-700">
             Chưa có mẫu Part 2 — chạy migration <code>0022_competitor_part2_fallback.sql</code> trên Supabase
             trước.
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-medium">Bài WordPress từ caption FB</h2>
+          <p className="text-sm text-neutral-500">
+            Gửi Gemini khi bấm <b>Tạo bài WP</b> ở trang Bài viết, chọn nguồn &quot;Từ caption FB + Part 2&quot;.
+          </p>
+        </div>
+        {wpArticle ? (
+          <PromptTemplateForm kind="wp_article" initialBody={wpArticle.body} updatedAt={wpArticle.updated_at} />
+        ) : (
+          <div className="rounded-2xl border border-dashed border-neutral-300 p-10 text-center text-neutral-400 dark:border-neutral-700">
+            Chưa có mẫu bài WP — chạy migration <code>0023_post_image_backup.sql</code> trên Supabase trước.
           </div>
         )}
       </div>

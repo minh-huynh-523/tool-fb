@@ -19,7 +19,7 @@ export type SafePage = Omit<FacebookPageRow, 'access_token'>;
 
 // Cột tường minh — KHÔNG lấy `raw` (jsonb lớn, không render) để tránh over-fetch.
 const POST_COLUMNS =
-  'id, page_id, fb_post_id, message, permalink, media_type, media_url, fb_created_at, is_published, scheduled_publish_time, display_time, page_commented, comment_count, reaction_count, page_comment_at, wp_dismissed_at, synced_at, created_at';
+  'id, page_id, fb_post_id, message, permalink, media_type, media_url, fb_created_at, is_published, scheduled_publish_time, display_time, page_commented, comment_count, reaction_count, page_comment_at, wp_dismissed_at, synced_at, created_at, image_backup_url, image_backup_at, image_backup_error';
 
 export async function listPages(): Promise<SafePage[]> {
   const db = createSupabaseAdmin();
@@ -374,9 +374,11 @@ export async function getCompetitorPageWithPosts(id: string): Promise<Competitor
   return { page: page as CompetitorPageRow, posts: mapped };
 }
 
-// Prompt gửi Gemini ('main' = mega-prompt ảnh/video, 'part2' = fallback Part 2, xem 0022).
-// Null = migration tương ứng chưa chạy hoặc chưa seed.
-export async function getPromptTemplate(kind: 'main' | 'part2' = 'main'): Promise<PromptTemplateRow | null> {
+// Prompt gửi Gemini ('main' = mega-prompt ảnh/video, 'part2' = fallback Part 2 [0022], 'wp_article'
+// = bài WP từ caption FB [0023]). Null = migration tương ứng chưa chạy hoặc chưa seed.
+export async function getPromptTemplate(
+  kind: 'main' | 'part2' | 'wp_article' = 'main',
+): Promise<PromptTemplateRow | null> {
   const db = createSupabaseAdmin();
   const { data, error } = await db.from('prompt_template').select('*').eq('kind', kind).maybeSingle();
   if (error) throw error;

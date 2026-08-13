@@ -305,7 +305,15 @@ async function postFullStoryComment(db: SupabaseClient, postId: string, permalin
     })
     .select('id')
     .single();
-  if (error || !inserted) return false;
+  if (error) {
+    // 23505 = vi phạm scheduled_comment_no_dup_idx (migration 0019) — race với 1 lượt khác vừa
+    // chèn Y HỆT message này trước 1 nhịp (vd bấm tay "Đăng vào comment" đúng lúc cron auto-publish
+    // cũng chạy). Đây là ĐÃ CÓ comment rồi, không phải lỗi thật — coi như xong, đừng đánh dấu
+    // wp_publish_queue lỗi (không thì badge báo "comment lỗi" oan trong khi FB đã có comment).
+    if (error.code === '23505') return true;
+    return false;
+  }
+  if (!inserted) return false;
 
   return (await drainOne((inserted as { id: string }).id)) === 'SENT';
 }

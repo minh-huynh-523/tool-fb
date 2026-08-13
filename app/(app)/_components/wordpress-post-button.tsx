@@ -22,6 +22,10 @@ import {
 
 type Preview = { title: string; imageUrl: string | null; description: string; contentHtml: string; parts: number };
 
+// Nguồn nội dung ở bước 1: "url" = dán link bài ngoài để cào (như trước); "fb" = sinh từ caption FB
+// + Part 2 (comment đã lên lịch sớm nhất) của chính post qua Gemini — không cần dán gì cả.
+type SourceMode = "url" | "fb";
+
 // Override ảnh đại diện ở bước preview: giữ ảnh cào về / bỏ ảnh / dán link mới / upload file từ máy.
 type ImageOverride =
   | { kind: "auto" }
@@ -158,17 +162,21 @@ export function WordpressPostButton({
   postDbId,
   existing,
   commentsInfo,
+  hasCaption,
 }: {
   postDbId: string;
   existing?: { editUrl: string | null; status: string | null; permalink: string | null; sourceUrl?: string | null } | null;
   // Thông tin comment đã lên lịch của post: giờ first comment + nội dung (check trùng permalink).
   commentsInfo?: { firstRunAfter: string | null; texts: string[] };
+  // Post có caption FB không — quyết định nguồn "Từ caption FB + Part 2" có bấm được hay không.
+  hasCaption?: boolean;
 }) {
   const router = useRouter();
   // Bài đã có trên WP -> dialog chuyển sang chế độ SỬA (cào lại + sửa nội dung + cập nhật, PUT)
   // thay vì tạo bài mới (POST).
   const isEdit = !!existing?.editUrl;
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<SourceMode>("url");
   const [url, setUrl] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [title, setTitle] = useState("");
@@ -192,6 +200,7 @@ export function WordpressPostButton({
   }
 
   function reset() {
+    setMode("url");
     setUrl("");
     setPreview(null);
     setTitle("");
@@ -237,7 +246,24 @@ export function WordpressPostButton({
     setImageOverride({ kind: "file", file, objectUrl: URL.createObjectURL(file) });
   }
 
-  // BƯỚC 1: cào về để xem trước (title + ảnh + trích đoạn + nội dung — sẽ sửa được ở bước 2).
+  // Dùng chung cho cả 2 nguồn: nhận response preview (title/ảnh/mô tả/nội dung), đổ vào state.
+  function applyPreview(data: { title?: string; imageUrl?: string | null; description?: string; contentHtml?: string; parts?: number }) {
+    setPreview({
+      title: data.title ?? "",
+      imageUrl: data.imageUrl ?? null,
+      description: data.description ?? "",
+      contentHtml: data.contentHtml ?? "",
+      parts: data.parts ?? 1,
+    });
+    setTitle(data.title ?? "");
+    setContent(data.contentHtml ?? "");
+    setShowContentPreview(false);
+    setImageOverride({ kind: "auto" });
+    setImageUrlInput("");
+  }
+
+  // BƯỚC 1 (nguồn "url"): cào link bài ngoài để xem trước (title + ảnh + trích đoạn + nội dung —
+  // sẽ sửa được ở bước 2).
   async function doScrape() {
     if (!url.trim()) {
       toast.error("Cần nhập link bài gốc");
@@ -254,18 +280,24 @@ export function WordpressPostButton({
         toast.error(data.error ?? "Cào thất bại");
         return;
       }
-      setPreview({
-        title: data.title ?? "",
-        imageUrl: data.imageUrl ?? null,
-        description: data.description ?? "",
-        contentHtml: data.contentHtml ?? "",
-        parts: data.parts ?? 1,
-      });
-      setTitle(data.title ?? "");
-      setContent(data.contentHtml ?? "");
-      setShowContentPreview(false);
-      setImageOverride({ kind: "auto" });
-      setImageUrlInput("");
+      applyPreview(data);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // BƯỚC 1 (nguồn "fb"): sinh bài từ caption FB + Part 2 của chính post qua Gemini, xem trước.
+  async function doGenerate() {
+    setLoading(true);
+    try {
+      const { res, data } = await fetchJson(`/api/posts/${postDbId}/wordpress/generate`, { method: "POST" });
+      if (!res.ok) {
+        toast.error(data.error ?? "Sinh bài thất bại");
+        return;
+      }
+      applyPreview(data);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -287,6 +319,7 @@ export function WordpressPostButton({
     setLoading(true);
     try {
       const fd = new FormData();
+      fd.set("mode", mode);
       fd.set("sourceUrl", url.trim());
       fd.set("title", title.trim());
       fd.set("contentHtml", content);
@@ -421,28 +454,59 @@ export function WordpressPostButton({
             </>
           ) : !preview ? (
             <>
-              <div className="space-y-2">
-                <Label htmlFor="wp-source-url">Link bài gốc</Label>
-                <Input
-                  id="wp-source-url"
-                  placeholder="https://1millionstories.net/…"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !loading) doScrape();
-                  }}
-                />
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={mode === "url" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setMode("url")}
+                >
+                  Dán link ngoài
+                </Button>
+                <Button
+                  type="button"
+                  variant={mode === "fb" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setMode("fb")}
+                  disabled={!hasCaption}
+                  title={hasCaption ? undefined : "Bài này chưa có caption FB"}
+                >
+                  Từ caption FB + Part 2
+                </Button>
               </div>
+
+              {mode === "url" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="wp-source-url">Link bài gốc</Label>
+                  <Input
+                    id="wp-source-url"
+                    placeholder="https://1millionstories.net/…"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !loading) doScrape();
+                    }}
+                  />
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Gemini viết lại caption FB của bài này + Part 2 (comment đã lên lịch sớm nhất, nếu có) thành 1
+                  bài viết hoàn chỉnh — ảnh đại diện lấy từ ảnh FB của bài (đã backup, xem trang Bài viết).
+                </p>
+              )}
+
               <DialogFooter>
-                <Button onClick={doScrape} disabled={loading}>
+                <Button onClick={mode === "url" ? doScrape : doGenerate} disabled={loading || (mode === "fb" && !hasCaption)}>
                   {loading ? (
                     <>
-                      <Loader2 className="animate-spin" /> Đang cào…
+                      <Loader2 className="animate-spin" /> {mode === "url" ? "Đang cào…" : "Đang sinh…"}
                     </>
+                  ) : mode === "url" ? (
+                    isEdit ? "Cào lại" : "Cào về"
                   ) : isEdit ? (
-                    "Cào lại"
+                    "Sinh lại"
                   ) : (
-                    "Cào về"
+                    "Tạo từ FB"
                   )}
                 </Button>
               </DialogFooter>

@@ -179,6 +179,7 @@ export function PostsTable({
                           firstRunAfter: p.comments[0]?.run_after ?? null,
                           texts: p.comments.map((c) => `${c.message ?? ""} ${c.attachment_url ?? ""}`),
                         }}
+                        hasCaption={!!p.message?.trim()}
                       />
                       {dismissable && <DismissWpButton postDbId={p.id} dismissed={!!p.wp_dismissed_at} />}
                       <Button size="sm" onClick={() => setOpenId(isOpen ? null : p.id)}>

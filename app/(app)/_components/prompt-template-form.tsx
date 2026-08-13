@@ -13,12 +13,14 @@ import { formatVN } from "@/lib/date";
 // tách được prompt ảnh / prompt video (vẫn còn "Xem bản gốc", nhưng mất tiện lợi).
 const REQUIRED_HEADINGS = ["STORY ANALYSIS", "IMAGE PROMPT", "VIDEO PROMPT"];
 
+type TemplateKind = "main" | "part2" | "wp_article";
+
 export function PromptTemplateForm({
   kind,
   initialBody,
   updatedAt,
 }: {
-  kind: "main" | "part2";
+  kind: TemplateKind;
   initialBody: string;
   updatedAt: string;
 }) {
@@ -62,7 +64,7 @@ export function PromptTemplateForm({
             dùng biến nào, caption sẽ tự được nối vào cuối prompt.
           </p>
         </div>
-      ) : (
+      ) : kind === "part2" ? (
         <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
           <p>
             Chỉ chạy TỰ ĐỘNG lúc cào, cho bài KHÔNG có comment nào của page (xem cột &quot;Part 2&quot; ở trang
@@ -71,6 +73,22 @@ export function PromptTemplateForm({
           <p className="mt-1">
             Biến dùng được: <code>{"{{caption}}"}</code> — caption FB bài đối thủ. Kết quả trả về được lưu
             nguyên văn làm Part 2, không tách mục.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-xs text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+          <p>
+            Chạy khi bấm &quot;Tạo bài WP&quot; ở trang Bài viết, chọn nguồn &quot;Từ caption FB + Part 2&quot; — thay cho
+            việc dán link bài ngoài để cào.
+          </p>
+          <p className="mt-1">
+            Biến dùng được: <code>{"{{caption}}"}</code> — caption FB bài của mình, <code>{"{{part2}}"}</code> —
+            comment đã lên lịch sớm nhất (có thể rỗng). Kết quả trả về là NGUYÊN VĂN nội dung bài viết
+            (HTML) — không cần/không nên có tiêu đề trong đó.
+          </p>
+          <p className="mt-1">
+            Tiêu đề KHÔNG do Gemini đặt — app tự lấy nguyên văn đoạn mở đầu của chính caption gốc làm
+            tiêu đề, không qua model nên không bị diễn giải lại.
           </p>
         </div>
       )}

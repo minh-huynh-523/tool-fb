@@ -67,6 +67,7 @@ export default async function PostDetailPage({ params }: { params: Promise<{ id:
                     : null,
                   texts: comments.map((c) => `${c.message ?? ""} ${c.attachment_url ?? ""}`),
                 }}
+                hasCaption={!!post.message?.trim()}
               />
               {post.permalink && (
                 <Button variant="outline" size="sm" asChild>

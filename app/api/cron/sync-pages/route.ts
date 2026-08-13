@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncAllPages } from "@/lib/sync";
 import { processDueComments } from "@/lib/comments";
+import { backupPostImages } from "@/lib/post-image-backup";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -8,6 +9,8 @@ export const maxDuration = 60;
 // GET|POST /api/cron/sync-pages — auto-sync bởi cron ngoài (cron-job.org), bảo vệ bằng CRON_SECRET.
 // Sync (kéo bài mới + reconcile reel lên lịch vừa publish) RỒI drain comment tới hạn —
 // một cron duy nhất khép kín luồng: reel lên sóng -> đổi id -> comment đăng đúng bài.
+// Backup ảnh FB (post.media_url -> Supabase Storage, xem lib/post-image-backup.ts) chạy SAU sync
+// (mới biết bài nào là bài mới) — lỗi ở đây KHÔNG được chặn comment tới hạn, chỉ best-effort.
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
@@ -23,8 +26,12 @@ async function run(req: NextRequest) {
   }
   try {
     const results = await syncAllPages({ limit: 25 });
+    const imageBackup = await backupPostImages().catch((e) => {
+      console.error("[image-backup] lỗi:", (e as Error).message);
+      return null;
+    });
     const comments = await processDueComments();
-    return NextResponse.json({ ok: true, sync: results, comments });
+    return NextResponse.json({ ok: true, sync: results, imageBackup, comments });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

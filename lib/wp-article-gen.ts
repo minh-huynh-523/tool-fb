@@ -35,7 +35,7 @@ function firstParagraph(caption: string): string {
 export async function generateWpArticleFromFb(db: SupabaseClient, postDbId: string): Promise<ScrapedArticle> {
   const { data: post, error: postErr } = await db
     .from('post')
-    .select('message, permalink, media_url, image_backup_url')
+    .select('message, permalink, image_backup_url')
     .eq('id', postDbId)
     .maybeSingle();
   if (postErr) throw new WpArticleGenError(postErr.message, 500);
@@ -86,7 +86,12 @@ export async function generateWpArticleFromFb(db: SupabaseClient, postDbId: stri
     title: firstParagraph(caption),
     contentHtml,
     description: '',
-    imageUrl: post.image_backup_url ?? post.media_url ?? null,
+    // CHỈ dùng ảnh đã backup vào Supabase Storage (post.media_url là link CDN của FB, hay hết
+    // hạn/chặn hotlink — dùng thẳng sẽ có lúc WP tải ảnh lỗi âm thầm vì lúc publish link đã chết,
+    // xem lib/post-image-backup.ts). Chưa backup xong thì bài WP tạm không có ảnh đại diện, KHÔNG
+    // fallback về link FB gốc — enqueueWpContentCandidates() đã gate để không đẩy bài vào hàng đợi
+    // trước khi backup được thử (xem lib/auto-publish.ts).
+    imageUrl: post.image_backup_url ?? null,
     sourceUrl: post.permalink ?? '',
     parts: 1,
   };

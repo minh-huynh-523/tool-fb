@@ -2,6 +2,7 @@ import 'server-only';
 import { createSupabaseAdmin } from './supabase/admin';
 import { generateText, GeminiError, DEFAULT_MODEL } from './gemini';
 import { splitPromptSections } from './prompt-sections';
+import { getPart2 } from './part2';
 
 // Sinh prompt ảnh + prompt video cho 1 bài đối thủ:
 //   caption (+ part 2) -> mega-prompt trong bảng prompt_template -> Gemini (1 lần gọi)
@@ -44,7 +45,7 @@ export async function generatePrompts(postId: string): Promise<PromptResult> {
 
   const { data: post, error: postErr } = await db
     .from('competitor_post')
-    .select('id, caption, permalink')
+    .select('id, caption, permalink, part2_generated')
     .eq('id', postId)
     .maybeSingle();
   if (postErr) throw new PromptError(postErr.message, 500);
@@ -64,17 +65,15 @@ export async function generatePrompts(postId: string): Promise<PromptResult> {
     throw new PromptError('Chưa có mẫu prompt — vào trang "Mẫu prompt" để thiết lập', 400);
   }
 
-  // Part 2 = comment do chính page đối thủ đăng (đã lọc sẵn lúc cào). Chỉ dùng khi mẫu
-  // prompt có {{part2}} — mặc định mega-prompt hiện tại không có, nên không tốn token thừa.
+  // Part 2 = comment do chính page đối thủ đăng (đã lọc sẵn lúc cào), fallback bản Gemini sinh
+  // từ caption nếu bài không có (xem lib/part2.ts). Chỉ dùng khi mẫu prompt có {{part2}} —
+  // mặc định mega-prompt hiện tại không có, nên không tốn token thừa.
   const { data: comments } = await db
     .from('competitor_comment')
-    .select('message')
+    .select('is_page_author, message')
     .eq('competitor_post_id', postId)
     .order('commented_at', { ascending: true });
-  const part2 = (comments ?? [])
-    .map((c: { message: string | null }) => (c.message ?? '').trim())
-    .filter(Boolean)
-    .join('\n\n');
+  const { text: part2 } = getPart2(comments ?? [], post);
 
   const story = caption.length > MAX_CAPTION_CHARS ? `${caption.slice(0, MAX_CAPTION_CHARS)}\n…(đã cắt)` : caption;
 

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { formatVN, relativeVN } from "@/lib/date";
 import { useNow } from "@/lib/use-now";
 import { collectPostLinks, competitorPageUrl } from "@/lib/fb-link";
+import { getPart2 } from "@/lib/part2";
 import type { CompetitorPostWithComments } from "@/lib/queries";
 import { CollapsibleText } from "./collapsible-text";
 import { CopyButton } from "./copy-button";
@@ -160,13 +161,9 @@ export function CompetitorPostsTable({
           </thead>
           <tbody>
             {posts.map((post) => {
-              // CHỈ comment của page — giờ DB lưu cả comment người ngoài (để không mất link của
-              // họ), nhưng cột này vẫn phải là nội dung "Part 2" do page tự đăng như trước.
-              const part2 = post.comments
-                .filter((c) => c.is_page_author)
-                .map((c) => (c.message ?? "").trim())
-                .filter(Boolean)
-                .join("\n\n");
+              // Ưu tiên comment thật của page; bài không có thì dùng bản Gemini sinh từ caption
+              // (xem lib/part2.ts + lib/fb-scraper/part2-fallback.ts).
+              const { text: part2, source: part2Source } = getPart2(post.comments, post);
               const links = collectPostLinks(post);
 
               return (
@@ -248,11 +245,22 @@ export function CompetitorPostsTable({
                     )}
                   </td>
 
-                  {/* Part 2: nội dung comment của chính page (nhiều comment thì nối lại) */}
+                  {/* Part 2: comment thật của page, hoặc bản Gemini sinh từ caption nếu bài
+                      không có comment nào (đánh dấu "AI" để phân biệt — không phải lời page nói) */}
                   <td className="px-4 py-3">
                     {part2 ? (
                       <div className="space-y-1.5">
-                        <div className="flex justify-end">
+                        <div className="flex items-center justify-between gap-2">
+                          {part2Source === "generated" ? (
+                            <span
+                              className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+                              title="Bài này không có comment của page — Part 2 do Gemini sinh từ caption"
+                            >
+                              AI sinh
+                            </span>
+                          ) : (
+                            <span />
+                          )}
                           <CopyButton text={part2} label="Copy part 2" />
                         </div>
                         <CollapsibleText text={part2} />

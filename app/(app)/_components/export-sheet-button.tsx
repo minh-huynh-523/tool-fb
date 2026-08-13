@@ -9,6 +9,7 @@ import { fetchJson } from "@/lib/fetch-json";
 import { useNow } from "@/lib/use-now";
 import { sheetState } from "@/lib/sheet-state";
 import { pickSheetRows } from "@/lib/sheet-rows";
+import { getPart2 } from "@/lib/part2";
 import type { CompetitorPostWithComments } from "@/lib/queries";
 import { SheetStateBadge } from "./sheet-state-badge";
 
@@ -64,12 +65,9 @@ export function ExportSheetButton({
     // Chỉ nội dung, KHÔNG hàng tiêu đề — dán nối tiếp vào sheet có sẵn không bị chen tên cột.
     const tsv = rows
       .map((p) => {
-        // Chỉ comment của page (giống cột "Part 2" trên bảng) — DB giờ lưu cả comment người ngoài.
-        const part2 = p.comments
-          .filter((c) => c.is_page_author)
-          .map((c) => (c.message ?? "").trim())
-          .filter(Boolean)
-          .join("\n\n");
+        // Giống cột "Part 2" trên bảng: ưu tiên comment thật của page, fallback bản Gemini sinh
+        // từ caption nếu bài không có (xem lib/part2.ts).
+        const { text: part2 } = getPart2(p.comments, p);
         // MỌI link, không chỉ cái đầu. Vẫn gói trong 1 ô để giữ đúng 5 cột — thêm cột sẽ lệch
         // sheet người dùng đang dán vào.
         const link = collectPostLinks(p).join(" | ");

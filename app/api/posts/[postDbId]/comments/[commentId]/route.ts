@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { drainOne } from "@/lib/comments";
+import { callEdgeFunction } from "@/lib/edge-functions";
 import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
 import { vnLocalToISO } from "@/lib/date";
 import type { ScheduledCommentRow } from "@/lib/types";
@@ -187,12 +187,12 @@ export async function PATCH(
     return NextResponse.json({ error: "Comment vừa được worker xử lý — tải lại trang để xem trạng thái." }, { status: 409 });
   }
 
-  // Nếu giờ mới đã tới hạn thì gửi luôn sau response (drainOne tự bỏ qua nếu chưa tới giờ).
+  // Nếu giờ mới đã tới hạn thì gửi luôn sau response (Edge Function tự bỏ qua nếu chưa tới giờ).
   after(async () => {
     try {
-      await drainOne(commentId);
+      await callEdgeFunction("process-comments", { commentId });
     } catch {
-      // để cron xử lý lại
+      // để pg_cron xử lý lại (fb-dashboard-process-comments, mỗi 2 phút)
     }
   });
 

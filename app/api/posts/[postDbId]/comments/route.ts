@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { drainOne } from "@/lib/comments";
+import { callEdgeFunction } from "@/lib/edge-functions";
 import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
 import { vnLocalToISO } from "@/lib/date";
 import type { PostRow, ScheduledCommentRow } from "@/lib/types";
@@ -160,12 +160,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pos
 
   const row = inserted as ScheduledCommentRow;
 
-  // Rút hàng đợi ngay sau khi trả response (không chặn request).
+  // Rút hàng đợi ngay sau khi trả response (không chặn request) — gọi Edge Function
+  // process-comments (xử lý thật nằm ở supabase/functions/**, Vercel chỉ còn là UI).
   after(async () => {
     try {
-      await drainOne(row.id);
+      await callEdgeFunction("process-comments", { commentId: row.id });
     } catch {
-      // để cron xử lý lại
+      // để pg_cron xử lý lại (fb-dashboard-process-comments, mỗi 2 phút)
     }
   });
 

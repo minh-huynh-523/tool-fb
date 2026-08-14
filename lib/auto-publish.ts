@@ -58,20 +58,28 @@ interface Candidate {
   comment_count: number | null;
   reaction_count: number | null;
   page_commented: boolean;
+  media_url: string | null;
+  image_backup_at: string | null;
 }
 
 export async function enqueueWpContentCandidates(
   db: SupabaseClient = createSupabaseAdmin(),
+  // Override cửa sổ thời gian — dùng để backfill 1 ngày cụ thể trong quá khứ (vd bấm tay ở
+  // /prompts chọn ngày) mà vẫn CÙNG NGƯỠNG reaction/comment với đường chạy tự động thường ngày.
+  // Bỏ trống -> mặc định todaySinceCutoff() như cron vẫn chạy.
+  window?: { fromIso: string; toIso: string },
 ): Promise<{ enqueued: number }> {
   const { minReactions, minComments } = autoPublishThresholds();
-  const { fromIso, toIso } = todaySinceCutoff();
+  const { fromIso, toIso } = window ?? todaySinceCutoff();
 
   // Cùng idiom anti-join với countPostsNeedingWp (lib/queries.ts): chưa có scraped_article =
   // chưa có bài WP nào cho post này. wp_dismissed_at IS NULL: tôn trọng "Bỏ qua" ở /wp-needed.
   // Ngưỡng reaction/comment lọc ở JS (không .gte ở SQL) vì là OR — xem dưới.
   const { data, error } = await db
     .from('post')
-    .select('id, comment_count, reaction_count, page_commented, scraped_article!left(post_id)')
+    .select(
+      'id, comment_count, reaction_count, page_commented, media_url, image_backup_at, scraped_article!left(post_id)',
+    )
     .eq('is_published', true)
     .is('scraped_article', null)
     .is('wp_dismissed_at', null)
@@ -84,10 +92,18 @@ export async function enqueueWpContentCandidates(
   // "Comment thật" = tổng comment trừ đi comment của chính page (nếu có) — cùng lý do với
   // lib/attention.ts (comment_count TÍNH CẢ comment của page, không trừ được chính xác hơn vì
   // page_commented chỉ là boolean).
-  const due = ((data ?? []) as Candidate[]).filter((p) => {
-    const real = (p.comment_count ?? 0) - (p.page_commented ? 1 : 0);
-    return (p.reaction_count ?? 0) >= minReactions || real >= minComments;
-  });
+  //
+  // Chặn thêm: bài CÓ ảnh (media_url) nhưng CHƯA được thử backup vào Supabase Storage
+  // (image_backup_at NULL) thì CHƯA đủ điều kiện enqueue — Stage 2 (Gemini) chỉ chạy 1 lần rồi
+  // chốt image_url vào wp_content_queue/wp_publish_queue mãi mãi (xem lib/wp-article-gen.ts:
+  // KHÔNG fallback về media_url), nên enqueue sớm quá sẽ khiến bài WP kẹt không ảnh dù backup
+  // xong sau đó. Bài không có ảnh gốc (media_url null) thì không cần đợi gì cả.
+  const due = ((data ?? []) as Candidate[])
+    .filter((p) => p.media_url === null || p.image_backup_at !== null)
+    .filter((p) => {
+      const real = (p.comment_count ?? 0) - (p.page_commented ? 1 : 0);
+      return (p.reaction_count ?? 0) >= minReactions || real >= minComments;
+    });
   if (!due.length) return { enqueued: 0 };
 
   // ignoreDuplicates = ON CONFLICT DO NOTHING: post đã có hàng (bất kể trạng thái) thì bỏ qua,
@@ -289,7 +305,15 @@ async function postFullStoryComment(db: SupabaseClient, postId: string, permalin
     })
     .select('id')
     .single();
-  if (error || !inserted) return false;
+  if (error) {
+    // 23505 = vi phạm scheduled_comment_no_dup_idx (migration 0019) — race với 1 lượt khác vừa
+    // chèn Y HỆT message này trước 1 nhịp (vd bấm tay "Đăng vào comment" đúng lúc cron auto-publish
+    // cũng chạy). Đây là ĐÃ CÓ comment rồi, không phải lỗi thật — coi như xong, đừng đánh dấu
+    // wp_publish_queue lỗi (không thì badge báo "comment lỗi" oan trong khi FB đã có comment).
+    if (error.code === '23505') return true;
+    return false;
+  }
+  if (!inserted) return false;
 
   return (await drainOne((inserted as { id: string }).id)) === 'SENT';
 }

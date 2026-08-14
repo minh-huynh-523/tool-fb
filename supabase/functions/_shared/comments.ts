@@ -37,7 +37,14 @@ export async function postFullStoryComment(db: SupabaseClient, postId: string, p
     })
     .select("id")
     .single();
-  if (insErr || !inserted) return false;
+  if (insErr) {
+    // 23505 = vi phạm scheduled_comment_no_dup_idx — race với 1 lượt khác (Vercel manual run hoặc
+    // nút "Đăng vào comment") vừa chèn Y HỆT message này trước 1 nhịp. ĐÃ CÓ comment rồi, không
+    // phải lỗi thật — coi như xong. Xem lib/auto-publish.ts bản Next.js để biết lý do đầy đủ.
+    if (insErr.code === "23505") return true;
+    return false;
+  }
+  if (!inserted) return false;
 
   try {
     const { data: page, error: pageErr } = await db

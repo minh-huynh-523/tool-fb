@@ -11,12 +11,20 @@ async function resolveAutoThumbnail(site: WpSite, autoImageUrl: string | null): 
   if (!autoImageUrl) return {};
   try {
     const imgRes = await fetch(autoImageUrl, { headers: { "User-Agent": UA } });
+    console.log(`[wp-publish] fetch ${autoImageUrl} -> ${imgRes.status} ${imgRes.headers.get("content-type") ?? "?"}`);
     if (imgRes.ok) {
       const buf = new Uint8Array(await imgRes.arrayBuffer());
       const type = imgRes.headers.get("content-type") ?? "image/jpeg";
       const name = autoImageUrl.split("/").pop()?.split("?")[0] || "featured.jpg";
-      const up = await wpUploadFile(site, { name, type, bits: buf });
-      if (up.id) return { thumbnailId: up.id };
+      try {
+        const up = await wpUploadFile(site, { name, type, bits: buf });
+        console.log(`[wp-publish] wpUploadFile response id=${up.id} url=${up.url}`);
+        if (up.id) return { thumbnailId: up.id };
+      } catch (e) {
+        console.error(`[wp-publish] wpUploadFile error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    } else {
+      console.error(`[wp-publish] fetch failed: ${autoImageUrl} -> ${imgRes.status}`);
     }
   } catch {
     // bỏ qua ảnh — auto là best-effort, giống bản Next.js
@@ -47,9 +55,17 @@ export async function publishWpArticleForPost(
   const site = await getWpSiteForPost(db, postDbId);
   const thumb = await resolveAutoThumbnail(site, input.autoImageUrl ?? null);
 
+  // If featured image upload failed (no thumbnailId) but we have an image URL,
+  // embed the image into the post content as a fallback so the article still shows an image.
+  let contentHtml = input.contentHtml;
+  if (!thumb.thumbnailId && input.autoImageUrl) {
+    const safeAlt = (input.title || "").replace(/"/g, "&quot;");
+    contentHtml = `<p><img src="${input.autoImageUrl}" alt="${safeAlt}"/></p>\n\n${input.contentHtml}`;
+  }
+
   const wpPostId = await wpNewPostDraft(site, {
     title: input.title,
-    contentHtml: input.contentHtml,
+    contentHtml,
     excerpt: input.excerpt,
     thumbnailId: thumb.thumbnailId,
     categories: [site.category],

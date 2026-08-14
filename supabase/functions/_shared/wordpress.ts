@@ -4,6 +4,7 @@
 // khả năng cao là do đây — fallback là viết tay request XML-RPC bằng fetch() (không khó, chỉ 4
 // method: wp.uploadFile / wp.newPost / wp.editPost / wp.getPost).
 import xmlrpc from "npm:xmlrpc@1.3.2";
+import { Buffer } from "npm:buffer";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 export interface WpSite {
@@ -38,12 +39,22 @@ export async function wpUploadFile(
   input: { name: string; type: string; bits: Uint8Array },
 ): Promise<WpUploaded> {
   const { xmlrpcUrl: url, user, password } = site;
+  try {
+    console.log(`[wpUploadFile] start upload name=${input.name} type=${input.type} size=${input.bits?.length ?? 0}`);
+  } catch {}
+
+  // xmlrpc library expects a Node Buffer (base64-able). Convert Uint8Array -> Buffer for Deno npm-compat.
+  const bitsBuf = Buffer.from(input.bits ?? new Uint8Array());
+
   const res = await call<{ id?: number | string; attachment_id?: number | string; url?: string }>(
     url,
     "wp.uploadFile",
-    [0, user, password, { name: input.name, type: input.type, bits: input.bits, overwrite: true }],
+    [0, user, password, { name: input.name, type: input.type, bits: bitsBuf, overwrite: true }],
   );
   const id = res.attachment_id ?? res.id;
+  try {
+    console.log(`[wpUploadFile] result id=${id ?? "<none>"} url=${res.url ?? "<none>"}`);
+  } catch {}
   return { id: id != null ? String(id) : "", url: res.url ?? "" };
 }
 

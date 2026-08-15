@@ -59,13 +59,20 @@ async function main() {
   }
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-  const { data, error } = await db
+  // --recent-hours=N: chỉ đụng comment vừa gửi. Facebook chỉ chịu vẽ lại thẻ preview của comment
+  // còn mới; comment cũ thì Graph nhận lệnh sửa mà không đổi gì, chỉ tổ dính nhãn "Đã chỉnh sửa".
+  const hoursArg = process.argv.find((a) => a.startsWith('--recent-hours='));
+  const hours = hoursArg ? Number(hoursArg.split('=')[1]) : null;
+  let query = db
     .from('scheduled_comment')
     .select('id, fb_comment_id, message, page_id')
     .eq('status', 'SENT')
     .not('fb_comment_id', 'is', null)
-    .like('message', 'Full story%')
-    .order('sent_at', { ascending: true });
+    .like('message', 'Full story%');
+  if (hours && hours > 0) {
+    query = query.gte('sent_at', new Date(Date.now() - hours * 3600_000).toISOString());
+  }
+  const { data, error } = await query.order('sent_at', { ascending: true });
   if (error) {
     console.error('Đọc scheduled_comment lỗi:', error.message);
     process.exit(1);

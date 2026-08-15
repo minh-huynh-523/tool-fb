@@ -110,8 +110,51 @@ interface Row {
   scraped_article: { wp_post_id: string | null; wp_status: string | null } | null;
 }
 
+// --pending: bài ĐÃ đăng FB, CHƯA lên WordPress, nhưng ảnh backup còn là bản nhỏ chộp lúc chúng
+// còn là reel lên lịch. Xoá mốc backup để cron tải lại từ media_url hiện tại (bản 405x720) TRƯỚC
+// khi auto-publish rút chúng ra — không thì cả loạt lại ra bài WordPress thiếu og:image.
+// Chỉ xoá mốc, KHÔNG xoá image_backup_url: nếu tải lại hỏng thì bài vẫn còn ảnh cũ để dùng.
+async function resetPendingBackups(db: SupabaseClient, dryRun: boolean): Promise<void> {
+  const { data, error } = await db
+    .from('post')
+    .select('id, image_backup_url, image_backup_at, scraped_article!left(post_id)')
+    .eq('is_published', true)
+    .not('image_backup_url', 'is', null)
+    .not('image_backup_at', 'is', null)
+    .order('fb_created_at', { ascending: false })
+    .limit(200);
+  if (error) throw new Error(`Đọc post lỗi: ${error.message}`);
+
+  const pending = ((data ?? []) as unknown as {
+    id: string;
+    image_backup_url: string;
+    scraped_article: unknown | null;
+  }[]).filter((r) => !r.scraped_article);
+  console.log(`${pending.length} bài đã đăng FB nhưng chưa lên WordPress\n`);
+
+  const small: string[] = [];
+  for (const r of pending) {
+    try {
+      const img = await fetchImage(r.image_backup_url);
+      const size = imageSize(img.buf);
+      if (!size || size.width < MIN_WIDTH) small.push(r.id);
+    } catch (e) {
+      console.log(`  ${r.id.slice(0, 8)} — không đo được ảnh: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  console.log(`${small.length} bài đang giữ ảnh dưới ${MIN_WIDTH}px`);
+  if (!small.length || dryRun) {
+    if (dryRun && small.length) console.log('DRY RUN — chưa xoá mốc backup nào');
+    return;
+  }
+  const { error: upErr } = await db.from('post').update({ image_backup_at: null }).in('id', small);
+  if (upErr) throw new Error(`Xoá mốc backup lỗi: ${upErr.message}`);
+  console.log(`Đã xoá mốc backup cho ${small.length} bài — cron sẽ tải lại ảnh lớn ở lượt tới.`);
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry');
+  const pendingMode = process.argv.includes('--pending');
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -119,6 +162,11 @@ async function main() {
     process.exit(1);
   }
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+
+  if (pendingMode) {
+    await resetPendingBackups(db, dryRun);
+    return;
+  }
 
   const { data, error } = await db
     .from('post')

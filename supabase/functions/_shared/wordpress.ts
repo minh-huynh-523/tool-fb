@@ -4,7 +4,10 @@
 // khả năng cao là do đây — fallback là viết tay request XML-RPC bằng fetch() (không khó, chỉ 4
 // method: wp.uploadFile / wp.newPost / wp.editPost / wp.getPost).
 import xmlrpc from "npm:xmlrpc@1.3.2";
-import { Buffer } from "npm:buffer";
+// node:buffer (KHÔNG phải npm:buffer): xmlrpc chỉ base64-hoá khi Buffer.isBuffer() true, mà
+// npm:buffer là polyfill userland -> class khác Buffer global -> ảnh bị serialize thành <struct>
+// và WordPress không tạo được attachment (chính là bug "bài WP không có ảnh").
+import { Buffer } from "node:buffer";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 export interface WpSite {
@@ -118,6 +121,47 @@ export async function wpNewPostDraft(
   if (input.categories?.length) content.terms_names = { category: input.categories };
   const id = await call<string | number>(url, "wp.newPost", [0, user, password, content]);
   return String(id);
+}
+
+// Port của wpGetThumbnailId (lib/wordpress/client.ts): attachment id ảnh đại diện, null nếu chưa có.
+// Ném lỗi nếu bài không tồn tại (caller phân biệt "bài đã xoá" với "bài chưa có ảnh").
+export async function wpGetThumbnailId(site: WpSite, postId: string): Promise<string | null> {
+  const { xmlrpcUrl: url, user, password } = site;
+  const res = await call<{ post_thumbnail?: { attachment_id?: number | string; id?: number | string } }>(
+    url,
+    "wp.getPost",
+    [0, user, password, parseInt(postId, 10), ["post_thumbnail"]],
+  );
+  const t = res.post_thumbnail;
+  if (!t || Object.keys(t).length === 0) return null;
+  const id = t.attachment_id ?? t.id;
+  return id != null ? String(id) : null;
+}
+
+// wp.editPost -> sửa bài đã tồn tại (title/content/ảnh đại diện/status/category).
+// thumbnailId: "0" = gỡ ảnh đại diện; undefined = giữ nguyên ảnh cũ.
+export async function wpEditPost(
+  site: WpSite,
+  postId: string,
+  input: {
+    title?: string;
+    contentHtml?: string;
+    excerpt?: string;
+    thumbnailId?: string;
+    categories?: string[];
+    status?: "draft" | "publish";
+  },
+): Promise<boolean> {
+  const { xmlrpcUrl: url, user, password } = site;
+  const content: Record<string, unknown> = {};
+  if (input.title !== undefined) content.post_title = input.title;
+  if (input.contentHtml !== undefined) content.post_content = input.contentHtml;
+  if (input.excerpt !== undefined) content.post_excerpt = input.excerpt;
+  if (input.thumbnailId !== undefined) content.post_thumbnail = Number(input.thumbnailId);
+  if (input.status !== undefined) content.post_status = input.status;
+  if (input.categories?.length) content.terms_names = { category: input.categories };
+  const ok = await call<boolean>(url, "wp.editPost", [0, user, password, parseInt(postId, 10), content]);
+  return !!ok;
 }
 
 function trimSlash(url: string): string {

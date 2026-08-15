@@ -13,7 +13,8 @@
     "fb-login": "tsx scripts/fb-login.ts",
     "worker": "tsx --env-file=.env.local scripts/scrape-worker.ts",
     "worker:once": "tsx --env-file=.env.local scripts/scrape-worker.ts --once",
-    "worker:dry": "tsx --env-file=.env.local scripts/scrape-worker.ts --dry"
+    "worker:dry": "tsx --env-file=.env.local scripts/scrape-worker.ts --dry",
+    "wp:fix-thumbnails": "tsx --env-file=.env.local scripts/fix-wp-thumbnails.ts"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

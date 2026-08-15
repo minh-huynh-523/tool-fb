@@ -83,6 +83,22 @@ export async function wpGetPostInfo(
   }
 }
 
+// wp.getPost chỉ lấy post_thumbnail -> attachment id của ảnh đại diện, null nếu bài chưa có ảnh
+// (WP trả struct rỗng). Dùng để KHÔNG upload lại ảnh cho bài đã có thumbnail (tránh rác Media Library).
+// Ném lỗi nếu bài không tồn tại -> caller phân biệt được "bài đã xoá" với "bài chưa có ảnh".
+export async function wpGetThumbnailId(site: WpSite, postId: string): Promise<string | null> {
+  const { xmlrpcUrl: url, user, password } = site;
+  const res = await call<{ post_thumbnail?: { attachment_id?: number | string; id?: number | string } | unknown[] }>(
+    url,
+    'wp.getPost',
+    [0, user, password, parseInt(postId, 10), ['post_thumbnail']],
+  );
+  const t = res.post_thumbnail as { attachment_id?: number | string; id?: number | string } | undefined;
+  if (!t || Object.keys(t).length === 0) return null;
+  const id = t.attachment_id ?? t.id;
+  return id != null ? String(id) : null;
+}
+
 // wp.editPost -> sửa bài đã tồn tại (title/content/ảnh đại diện/status/category). KHÔNG set post_name
 // (giữ nguyên slug hiện có) để không phá permalink đã chia sẻ/lên lịch comment. thumbnailId "0" = gỡ ảnh
 // đại diện; undefined = giữ nguyên ảnh cũ. Trả về true/false theo WP.

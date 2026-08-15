@@ -25,11 +25,16 @@ export async function backupPostImages(
   db: SupabaseClient,
   limit: number = BATCH_LIMIT,
 ): Promise<PostImageBackupResult> {
+  // CHỈ backup bài ĐÃ đăng: reel lúc còn lên lịch chỉ có `picture` từ /videos (thumbnail ~160px),
+  // chộp bản đó là kẹt ảnh nhỏ vĩnh viễn — ảnh đại diện bài WP dưới 200px khiến Rank Math bỏ
+  // og:image và comment "Full story" trên FB mất thumbnail. Bài đã đăng thì media_url là ảnh feed
+  // (đo thực tế 405x720). Bài chưa đăng không cần ảnh: auto-publish chỉ enqueue bài is_published.
   const { data, error } = await db
     .from("post")
     .select("id, page_id, fb_post_id, media_url")
     .not("media_url", "is", null)
     .is("image_backup_at", null)
+    .eq("is_published", true)
     .limit(limit);
   if (error) throw new Error(`Đọc bài cần backup ảnh lỗi: ${error.message}`);
 

@@ -207,9 +207,44 @@ export async function syncPage(db: SupabaseClient, pageId: string, opts: { limit
       ...scheduled.map((item) => toPostRow(pageId, item, false)),
       ...unpublishedVideos.map((v) => toVideoPostRow(pageId, v)),
     ];
+
+    // Ảnh backup được chốt 1 LẦN theo media_url tại thời điểm đó (post-image-backup.ts). Một bài
+    // reel đổi ảnh khi đăng: lúc lên lịch là `picture` từ /videos (~160px), đăng xong feed trả bản
+    // lớn. Nếu không xoá mốc backup thì Storage kẹt bản nhỏ. So khớp bằng path + tham số `stp`
+    // (kích thước) chứ KHÔNG so cả URL — FB đổi token `_nc_ohc/oh/oe` mỗi lần trả về, so nguyên
+    // URL sẽ backup lại mỗi lượt cron.
+    const mediaKey = (url: string | null): string | null => {
+      if (!url) return null;
+      try {
+        const u = new URL(url);
+        return `${u.pathname}|${u.searchParams.get("stp") ?? ""}`;
+      } catch {
+        return url;
+      }
+    };
+    const { data: before } = await db.from("post").select("fb_post_id, media_url").eq("page_id", pageId);
+    const oldKeys = new Map(
+      ((before ?? []) as { fb_post_id: string; media_url: string | null }[]).map((r) => [
+        r.fb_post_id,
+        mediaKey(r.media_url),
+      ]),
+    );
+
     if (rows.length) {
       const { error: upErr } = await db.from("post").upsert(rows, { onConflict: "fb_post_id" });
       if (upErr) throw upErr;
+    }
+
+    const reBackup = rows
+      .filter((r) => r.is_published && r.media_url)
+      .filter((r) => {
+        const old = oldKeys.get(r.fb_post_id);
+        return old != null && old !== mediaKey(r.media_url);
+      })
+      .map((r) => r.fb_post_id);
+    if (reBackup.length) {
+      const { error: rbErr } = await db.from("post").update({ image_backup_at: null }).in("fb_post_id", reBackup);
+      if (rbErr) warnings.push(`Không đặt lại mốc backup ảnh cho ${reBackup.length} bài: ${rbErr.message}`);
     }
     const scheduledCount = scheduled.length + unpublishedVideos.length;
     return {

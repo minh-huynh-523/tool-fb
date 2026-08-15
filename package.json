@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "deploy:functions": "set -a && . ./.env.local && set +a && npx --yes supabase@latest functions deploy --project-ref wevdllaqnypiqlqxdmkc",
     "fb-login": "tsx scripts/fb-login.ts",
     "worker": "tsx --env-file=.env.local scripts/scrape-worker.ts",
     "worker:once": "tsx --env-file=.env.local scripts/scrape-worker.ts --once",

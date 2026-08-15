@@ -3,8 +3,10 @@
 // được attachment -> bài ra không ảnh). Bug đã fix ở supabase/functions/_shared/wordpress.ts;
 // script này chỉ vá bài CŨ. Bản chạy trên Supabase: supabase/functions/fix-wp-thumbnails.
 //
-// Chạy:  npm run wp:fix-thumbnails -- --dry     (chỉ liệt kê, không đụng WP)
-//        npm run wp:fix-thumbnails              (upload + set ảnh đại diện)
+// Chạy:  npm run wp:fix-thumbnails -- --dry       (chỉ liệt kê, không đụng WP)
+//        npm run wp:fix-thumbnails                (upload + set ảnh đại diện)
+//        npm run wp:fix-thumbnails -- --all       (quét MỌI bài WP trong scraped_article, kể cả
+//                                                  bài đăng tay trong app, không chỉ hàng đợi auto)
 //
 // Tự viết lại phần gọi XML-RPC thay vì import lib/wordpress/* vì lib đó gắn 'server-only'
 // (chỉ chạy trong Next.js), giống các script khác trong thư mục này.
@@ -61,8 +63,66 @@ async function wpGetThumbnailId(site: WpSite, postId: string): Promise<string | 
   return id != null ? String(id) : null;
 }
 
+interface Target {
+  postId: string;
+  wpPostId: string;
+  imageUrl: string;
+  when: string;
+}
+
+// Mặc định: chỉ bài do cron auto-publish đăng (ảnh nguồn đã chốt sẵn trong hàng đợi).
+async function loadQueueRows(db: SupabaseClient): Promise<Target[]> {
+  const { data, error } = await db
+    .from('wp_publish_queue')
+    .select('post_id, image_url, created_at, scraped_article:post_id(wp_post_id)')
+    .eq('status', 'PUBLISHED')
+    .not('image_url', 'is', null)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Đọc wp_publish_queue lỗi: ${error.message}`);
+  return ((data ?? []) as unknown as {
+    post_id: string;
+    image_url: string;
+    created_at: string;
+    scraped_article: { wp_post_id: string | null } | null;
+  }[])
+    .filter((r) => r.scraped_article?.wp_post_id)
+    .map((r) => ({
+      postId: r.post_id,
+      wpPostId: String(r.scraped_article!.wp_post_id),
+      imageUrl: r.image_url,
+      when: r.created_at,
+    }));
+}
+
+// --all: MỌI bài WP đã tạo (kể cả đăng tay trong app), ảnh nguồn lấy từ post.image_backup_url —
+// bản backup trong Supabase Storage, KHÔNG dùng post.media_url (CDN của FB hay hết hạn/chặn hotlink).
+// Bỏ bài đã trash và bài không có ảnh backup (không có gì để gắn).
+async function loadAllArticles(db: SupabaseClient): Promise<Target[]> {
+  const { data, error } = await db
+    .from('scraped_article')
+    .select('post_id, wp_post_id, wp_status, created_at, post:post_id(image_backup_url)')
+    .not('wp_post_id', 'is', null)
+    .neq('wp_status', 'trash')
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`Đọc scraped_article lỗi: ${error.message}`);
+  return ((data ?? []) as unknown as {
+    post_id: string;
+    wp_post_id: string;
+    created_at: string;
+    post: { image_backup_url: string | null } | null;
+  }[])
+    .filter((r) => r.post?.image_backup_url)
+    .map((r) => ({
+      postId: r.post_id,
+      wpPostId: String(r.wp_post_id),
+      imageUrl: r.post!.image_backup_url!,
+      when: r.created_at,
+    }));
+}
+
 async function main() {
   const dryRun = process.argv.includes('--dry');
+  const scanAll = process.argv.includes('--all');
   const SUPABASE_URL = process.env.SUPABASE_URL;
   const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -71,39 +131,21 @@ async function main() {
   }
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
-  const { data, error } = await db
-    .from('wp_publish_queue')
-    .select('post_id, image_url, wp_post_id, created_at')
-    .eq('status', 'PUBLISHED')
-    .not('image_url', 'is', null)
-    .order('created_at', { ascending: true });
-  if (error) {
-    console.error('Đọc wp_publish_queue lỗi:', error.message);
-    process.exit(1);
-  }
-  const rows = (data ?? []) as { post_id: string; image_url: string; created_at: string }[];
-  console.log(`${rows.length} bài đã publish có ảnh nguồn${dryRun ? ' (DRY RUN)' : ''}\n`);
+  const rows = scanAll ? await loadAllArticles(db) : await loadQueueRows(db);
+  console.log(
+    `${rows.length} bài WP có ảnh nguồn (${scanAll ? 'MỌI bài trong scraped_article' : 'hàng đợi auto-publish'})` +
+      `${dryRun ? ' — DRY RUN' : ''}\n`,
+  );
 
   let fixed = 0;
   let alreadyOk = 0;
   let failed = 0;
 
   for (const row of rows) {
-    const tag = `${row.created_at.slice(0, 16)} post=${row.post_id.slice(0, 8)}`;
+    const tag = `${row.when.slice(0, 16)} post=${row.postId.slice(0, 8)}`;
+    const wpPostId = row.wpPostId;
     try {
-      const { data: art } = await db
-        .from('scraped_article')
-        .select('wp_post_id')
-        .eq('post_id', row.post_id)
-        .maybeSingle();
-      const wpPostId = art?.wp_post_id ? String(art.wp_post_id) : null;
-      if (!wpPostId) {
-        console.log(`${tag} — SKIP: chưa có wp_post_id`);
-        failed++;
-        continue;
-      }
-
-      const site = await getWpSiteForPost(db, row.post_id);
+      const site = await getWpSiteForPost(db, row.postId);
       const existing = await wpGetThumbnailId(site, wpPostId);
       if (existing) {
         console.log(`${tag} wp=${wpPostId} — OK sẵn (thumb ${existing})`);
@@ -116,7 +158,7 @@ async function main() {
         continue;
       }
 
-      const res = await fetch(row.image_url, { headers: { 'User-Agent': UA } });
+      const res = await fetch(row.imageUrl, { headers: { 'User-Agent': UA } });
       if (!res.ok) {
         console.log(`${tag} wp=${wpPostId} — FAIL tải ảnh: HTTP ${res.status}`);
         failed++;
@@ -124,7 +166,7 @@ async function main() {
       }
       const type = res.headers.get('content-type') ?? 'image/jpeg';
       const bits = Buffer.from(await res.arrayBuffer());
-      const name = row.image_url.split('/').pop()?.split('?')[0] || 'featured.jpg';
+      const name = row.imageUrl.split('/').pop()?.split('?')[0] || 'featured.jpg';
       const up = await call<{ id?: number | string; attachment_id?: number | string }>(
         site.xmlrpcUrl,
         'wp.uploadFile',

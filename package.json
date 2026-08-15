@@ -16,7 +16,8 @@
     "worker:dry": "tsx --env-file=.env.local scripts/scrape-worker.ts --dry",
     "wp:fix-thumbnails": "tsx --env-file=.env.local scripts/fix-wp-thumbnails.ts",
     "wp:refresh-images": "tsx --env-file=.env.local scripts/refresh-post-images.ts",
-    "fb:rescrape": "tsx --env-file=.env.local scripts/fb-rescrape-links.ts"
+    "fb:rescrape": "tsx --env-file=.env.local scripts/fb-rescrape-links.ts",
+    "fb:refresh-comments": "tsx --env-file=.env.local scripts/fb-refresh-comment-previews.ts"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

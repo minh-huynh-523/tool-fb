@@ -31,6 +31,13 @@ function realImageUrl(src: string | undefined): string | null {
   return m ? decodeURIComponent(m[1]) : src;
 }
 
+// FB hay lấy một size do WP sinh ra (…-405x247.jpg) thay vì file gốc (….jpg) — cùng một ảnh.
+// Bỏ hậu tố kích thước trước khi so, không thì mọi comment đúng đều bị coi là sai.
+function imageKey(url: string | null): string | null {
+  if (!url) return null;
+  return url.replace(/-\d+x\d+(\.[a-z]+)$/i, '$1');
+}
+
 async function ogImage(pageUrl: string): Promise<string | null> {
   const res = await undiciFetch(pageUrl, { headers: { 'User-Agent': UA }, dispatcher: agent });
   if (!res.ok) throw new Error(`trang WP trả HTTP ${res.status}`);
@@ -95,16 +102,28 @@ async function main() {
       };
       if (curBody.error) throw new Error(curBody.error.message ?? 'Graph lỗi');
       const have = realImageUrl(curBody.attachment?.media?.image?.src);
-      if (have === want) {
+      if (imageKey(have) === imageKey(want)) {
         console.log(`${tag} — OK sẵn`);
         okAlready++;
         continue;
       }
       if (dryRun) {
-        console.log(`${tag} — SẼ SỬA (đang hiện ${have?.split('/').pop() ?? 'không ảnh'})`);
+        console.log(
+          `${tag} — SẼ SỬA (đang: ${have?.split('/').pop() ?? 'không ảnh'} | cần: ${want.split('/').pop()})`,
+        );
         refreshed++;
         continue;
       }
+
+      // Scrape link TRƯỚC khi sửa comment. FB dựng lại attachment từ cache của link, nên sửa lúc
+      // cache còn cũ/trống thì comment ra ảnh sai — hoặc mất hẳn ảnh, tệ hơn trước khi sửa.
+      const sc = await undiciFetch(`${GRAPH}/?id=${encodeURIComponent(link)}&scrape=true&access_token=${token}`, {
+        method: 'POST',
+        dispatcher: agent,
+      });
+      const scBody = (await sc.json()) as { image?: { url: string }[]; error?: { message?: string } };
+      if (scBody.error) throw new Error(scBody.error.message ?? 'Graph lỗi khi scrape link');
+      if (!scBody.image?.length) throw new Error('FB scrape link xong vẫn không thấy ảnh — bỏ qua, KHÔNG sửa comment');
 
       const up = await undiciFetch(`${GRAPH}/${row.fb_comment_id}`, {
         method: 'POST',
@@ -114,8 +133,23 @@ async function main() {
       });
       const upBody = (await up.json()) as { success?: boolean; error?: { message?: string } };
       if (upBody.error) throw new Error(upBody.error.message ?? 'Graph lỗi');
-      console.log(`${tag} — ĐÃ SỬA -> ${want.split('/').pop()}`);
-      refreshed++;
+
+      // ĐỌC LẠI attachment thay vì tin `success: true`. Graph trả success cho lệnh sửa message dù
+      // KHÔNG vẽ lại thẻ preview — báo "đã sửa" theo ảnh mong muốn là báo láo, comment vẫn hiện
+      // logo cũ mà lại mang thêm nhãn "Đã chỉnh sửa".
+      await new Promise((r) => setTimeout(r, 3000));
+      const after = await undiciFetch(`${GRAPH}/${row.fb_comment_id}?fields=attachment&access_token=${token}`, {
+        dispatcher: agent,
+      });
+      const afterBody = (await after.json()) as { attachment?: { media?: { image?: { src?: string } } } };
+      const now = realImageUrl(afterBody.attachment?.media?.image?.src);
+      if (imageKey(now) === imageKey(want)) {
+        console.log(`${tag} — ĐÃ SỬA -> ${now!.split('/').pop()}`);
+        refreshed++;
+      } else {
+        console.log(`${tag} — KHÔNG ĂN: FB vẫn giữ ${now?.split('/').pop() ?? 'không ảnh'} (comment đã bị đánh dấu sửa)`);
+        failed++;
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.log(`${tag} — LỖI: ${msg}`);

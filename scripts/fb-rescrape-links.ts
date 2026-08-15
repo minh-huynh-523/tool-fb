@@ -8,9 +8,13 @@
 // LƯU Ý: scrape chỉ làm mới cache của LINK. Comment đã đăng từ trước thường giữ nguyên thẻ preview
 // đã render lúc đăng — cái chắc chắn hưởng lợi là các comment đăng sau khi scrape xong.
 import { createClient } from '@supabase/supabase-js';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { decryptToken } from '../lib/crypto';
 
 const GRAPH = `https://graph.facebook.com/${process.env.FACEBOOK_GRAPH_VERSION || 'v21.0'}`;
+// Ép IPv4: địa chỉ IPv6 của graph.facebook.com treo tới hết connect timeout trên máy này, mỗi lượt
+// chạy lại rớt vài link khác nhau với đúng một dòng "fetch failed" (xem scripts/refresh-post-images.ts).
+const graphAgent = new Agent({ connect: { family: 4, timeout: 30_000 } });
 
 interface Row {
   wp_permalink: string;
@@ -64,8 +68,9 @@ async function main() {
     }
     try {
       const token = decryptToken(stored);
-      const res = await fetch(`${GRAPH}/?id=${encodeURIComponent(url)}&scrape=true&access_token=${token}`, {
+      const res = await undiciFetch(`${GRAPH}/?id=${encodeURIComponent(url)}&scrape=true&access_token=${token}`, {
         method: 'POST',
+        dispatcher: graphAgent,
       });
       const body = (await res.json()) as { image?: { url: string }[]; error?: { message?: string } };
       if (!res.ok || body.error) throw new Error(body.error?.message ?? `HTTP ${res.status}`);
@@ -78,8 +83,15 @@ async function main() {
         noImage++;
       }
     } catch (e) {
-      console.log(`${short} — LỖI: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.log(`${short} — LỖI: ${msg}`);
       failed++;
+      // Hết quota Graph thì DỪNG HẲN: chạy tiếp chỉ đốt thêm hạn mức của app (ảnh hưởng cả cron
+      // sync-pages / process-comments) mà không scrape được link nào. Chờ ~1 giờ rồi chạy lại.
+      if (/#4\)|request limit reached|rate limit/i.test(msg)) {
+        console.log('\nDỪNG: Facebook báo hết hạn mức request cho app. Chờ khoảng 1 giờ rồi chạy lại.');
+        break;
+      }
     }
   }
 

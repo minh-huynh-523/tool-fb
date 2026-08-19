@@ -15,7 +15,11 @@ import type {
   ScheduledCommentRow,
 } from './types';
 
-export type SafePage = Omit<FacebookPageRow, 'access_token'>;
+// Bỏ CẢ access_token LẪN wp_password_enc: đây là kiểu đi thẳng ra React Server Component rồi
+// xuống client, nên secret không được có mặt trong kiểu. Chỉ mang theo cờ đã-có-mật-khẩu-chưa.
+export type SafePage = Omit<FacebookPageRow, 'access_token' | 'wp_password_enc'> & {
+  wp_has_password: boolean;
+};
 
 // Cột tường minh — KHÔNG lấy `raw` (jsonb lớn, không render) để tránh over-fetch.
 const POST_COLUMNS =
@@ -25,10 +29,15 @@ export async function listPages(): Promise<SafePage[]> {
   const db = createSupabaseAdmin();
   const { data, error } = await db
     .from('facebook_page')
-    .select('id, page_id, name, picture, token_expires_at, wp_xmlrpc_url, wp_base_url, wp_category, created_at, updated_at')
+    .select(
+      'id, page_id, name, picture, token_expires_at, wp_xmlrpc_url, wp_base_url, wp_category, wp_user, wp_password_enc, created_at, updated_at',
+    )
     .order('created_at', { ascending: true });
   if (error) throw error;
-  return (data ?? []) as SafePage[];
+  return (data ?? []).map(({ wp_password_enc, ...page }) => ({
+    ...page,
+    wp_has_password: Boolean(wp_password_enc),
+  })) as SafePage[];
 }
 
 // Trạng thái auto-publish (lib/auto-publish.ts, migration 0024) cho 1 post — 'publish' đi trước

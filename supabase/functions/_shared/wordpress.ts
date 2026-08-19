@@ -6,6 +6,7 @@
 import xmlrpc from "npm:xmlrpc@1.3.2";
 import { Buffer } from "npm:buffer";
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
+import { decryptToken } from "./crypto.ts";
 
 export interface WpSite {
   xmlrpcUrl: string;
@@ -132,7 +133,7 @@ export async function getWpSiteForPost(db: SupabaseClient, postDbId: string): Pr
 
   const { data: page, error: pageErr } = await db
     .from("facebook_page")
-    .select("name, wp_xmlrpc_url, wp_base_url, wp_category")
+    .select("name, wp_xmlrpc_url, wp_base_url, wp_category, wp_user, wp_password_enc")
     .eq("page_id", post.page_id)
     .maybeSingle();
   if (pageErr) throw new Error(pageErr.message);
@@ -141,8 +142,7 @@ export async function getWpSiteForPost(db: SupabaseClient, postDbId: string): Pr
   const xmlrpcUrl = (page?.wp_xmlrpc_url || Deno.env.get("WP_XMLRPC_URL") || "").trim();
   const baseUrl = trimSlash((page?.wp_base_url || Deno.env.get("WP_BASE_URL") || "").trim());
   const category = (page?.wp_category || Deno.env.get("WP_CATEGORY") || "Story").trim();
-  const user = Deno.env.get("WP_USER") ?? "";
-  const password = Deno.env.get("WP_PASSWORD") ?? "";
+  const { user, password } = resolveCredentials(page, label);
 
   if (!xmlrpcUrl) {
     throw new Error(`Chưa cấu hình WordPress cho ${label}: thêm XML-RPC URL ở trang Pages (hoặc đặt secret WP_XMLRPC_URL)`);
@@ -151,4 +151,25 @@ export async function getWpSiteForPost(db: SupabaseClient, postDbId: string): Pr
     throw new Error("Thiếu secret WP_USER / WP_PASSWORD");
   }
   return { xmlrpcUrl, baseUrl, category, user, password };
+}
+
+// Port của resolveCredentials trong lib/wordpress/site.ts — giữ CÙNG luật để cron (Edge) và bấm
+// tay (Next) không bao giờ đăng bằng 2 credential khác nhau cho cùng 1 page.
+function resolveCredentials(
+  page: { wp_user?: string | null; wp_password_enc?: string | null } | null,
+  label: string,
+): { user: string; password: string } {
+  const pageUser = page?.wp_user?.trim() || "";
+  const pagePassword = page?.wp_password_enc?.trim() || "";
+
+  if (pageUser && !pagePassword) {
+    throw new Error(`${label} có username WordPress riêng nhưng chưa có mật khẩu — nhập lại mật khẩu ở trang Pages`);
+  }
+  if (pagePassword && !pageUser) {
+    throw new Error(`${label} có mật khẩu WordPress riêng nhưng chưa có username — nhập lại ở trang Pages`);
+  }
+  if (pageUser && pagePassword) {
+    return { user: pageUser, password: decryptToken(pagePassword) };
+  }
+  return { user: Deno.env.get("WP_USER") ?? "", password: Deno.env.get("WP_PASSWORD") ?? "" };
 }

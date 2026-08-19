@@ -63,6 +63,8 @@ export default async function PagesPage() {
                       wp_xmlrpc_url: p.wp_xmlrpc_url,
                       wp_base_url: p.wp_base_url,
                       wp_category: p.wp_category,
+                      wp_user: p.wp_user,
+                      wp_has_password: p.wp_has_password,
                     }}
                   />
                 </td>

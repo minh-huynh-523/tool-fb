@@ -13,6 +13,10 @@ export interface FacebookPageRow {
   wp_xmlrpc_url: string | null;
   wp_base_url: string | null;
   wp_category: string | null;
+  // Credential WP riêng của page (null = dùng env WP_USER/WP_PASSWORD) — migration 0028.
+  // wp_password_enc đã mã hoá AES-256-GCM, chỉ giải ở server bằng decryptToken().
+  wp_user: string | null;
+  wp_password_enc: string | null;
   created_at: string;
   updated_at: string;
 }

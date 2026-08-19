@@ -21,6 +21,10 @@ export interface WpSiteConfig {
   wp_xmlrpc_url: string | null;
   wp_base_url: string | null;
   wp_category: string | null;
+  wp_user: string | null;
+  // Mật khẩu đã lưu KHÔNG bao giờ xuống client (chỉ bản mã hoá nằm ở DB) — chỉ có cờ này để UI
+  // nói được "đang dùng mật khẩu riêng" mà không phải hiển thị nó.
+  wp_has_password: boolean;
 }
 
 export function PageRowActions({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig }) {
@@ -99,8 +103,8 @@ export function PageRowActions({ pageId, wpSite }: { pageId: string; wpSite: WpS
   );
 }
 
-// Mỗi page đăng lên 1 site WordPress riêng. Để trống = dùng site mặc định trong .env.local.
-// User/password WP dùng chung cho mọi site nên không cấu hình ở đây.
+// Mỗi page đăng lên 1 site WordPress riêng, kèm credential riêng (migration 0028). Để trống =
+// dùng site + user/password mặc định trong .env.local.
 function WpSiteDialog({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -108,6 +112,8 @@ function WpSiteDialog({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig
   const [xmlrpcUrl, setXmlrpcUrl] = useState(wpSite.wp_xmlrpc_url ?? "");
   const [baseUrl, setBaseUrl] = useState(wpSite.wp_base_url ?? "");
   const [category, setCategory] = useState(wpSite.wp_category ?? "");
+  const [wpUser, setWpUser] = useState(wpSite.wp_user ?? "");
+  const [wpPassword, setWpPassword] = useState("");
 
   // Mở lại dialog -> nạp lại giá trị hiện tại (bỏ chỉnh sửa dở của lần trước).
   function onOpenChange(next: boolean) {
@@ -115,6 +121,8 @@ function WpSiteDialog({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig
       setXmlrpcUrl(wpSite.wp_xmlrpc_url ?? "");
       setBaseUrl(wpSite.wp_base_url ?? "");
       setCategory(wpSite.wp_category ?? "");
+      setWpUser(wpSite.wp_user ?? "");
+      setWpPassword(""); // luôn mở ra rỗng: server hiểu rỗng = giữ mật khẩu đang lưu
     }
     setOpen(next);
   }
@@ -131,7 +139,13 @@ function WpSiteDialog({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig
       const { res, data } = await fetchJson(`/api/pages/${encodeURIComponent(pageId)}/wp-site`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wp_xmlrpc_url: xmlrpcUrl, wp_base_url: baseUrl, wp_category: category }),
+        body: JSON.stringify({
+          wp_xmlrpc_url: xmlrpcUrl,
+          wp_base_url: baseUrl,
+          wp_category: category,
+          wp_user: wpUser,
+          wp_password: wpPassword,
+        }),
       });
       if (!res.ok) {
         toast.error(data.error ?? "Lưu cấu hình thất bại");
@@ -158,8 +172,8 @@ function WpSiteDialog({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig
         <DialogHeader>
           <DialogTitle>Site WordPress của page</DialogTitle>
           <DialogDescription>
-            Bài scrape của page này sẽ đăng lên site dưới đây. Để trống cả 3 ô = dùng site mặc định trong{" "}
-            <code>.env.local</code>. Username/password WordPress dùng chung, cấu hình ở env.
+            Bài scrape của page này sẽ đăng lên site dưới đây. Để trống hết = dùng site và
+            username/password mặc định trong <code>.env.local</code>. Mật khẩu được mã hoá trước khi lưu.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -190,6 +204,32 @@ function WpSiteDialog({ pageId, wpSite }: { pageId: string; wpSite: WpSiteConfig
               onChange={(e) => setCategory(e.target.value)}
               placeholder="Story"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`wp-user-${pageId}`}>Username WordPress</Label>
+            <Input
+              id={`wp-user-${pageId}`}
+              value={wpUser}
+              onChange={(e) => setWpUser(e.target.value)}
+              placeholder="để trống = dùng WP_USER ở env"
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`wp-pass-${pageId}`}>Mật khẩu WordPress</Label>
+            <Input
+              id={`wp-pass-${pageId}`}
+              type="password"
+              value={wpPassword}
+              onChange={(e) => setWpPassword(e.target.value)}
+              placeholder={wpSite.wp_has_password ? "••••••• (để trống = giữ nguyên)" : "để trống = dùng WP_PASSWORD ở env"}
+              autoComplete="new-password"
+            />
+            <p className="text-xs text-neutral-500">
+              {wpSite.wp_has_password
+                ? "Page này đang dùng mật khẩu riêng. Chỉ nhập khi muốn đổi — xoá ô username sẽ xoá cả cặp và quay về credential chung."
+                : "Nhập username thì phải nhập cả mật khẩu. Mật khẩu lưu dạng mã hoá AES-256-GCM, không đọc ngược ra được."}
+            </p>
           </div>
         </div>
         <DialogFooter>

@@ -9,6 +9,46 @@ import { createWorkerSupabase } from './supabase';
 // script worker (chạy bằng tsx, Node thuần) import — xem lib/gemini.ts.
 import { generateText, GeminiError, DEFAULT_MODEL } from '../gemini-core';
 
+// Trần độ dài Part 2 sinh bằng Gemini. Mẫu prompt (kind='part2', migration 0027) đã yêu cầu
+// ≤300 từ, nhưng mẫu SỬA ĐƯỢC trong app (/prompts) và prompt vốn không phải ràng buộc — model
+// viết lố là chuyện thường. Chặn lại ở đây để cột Part 2 không bao giờ vượt giới hạn.
+const MAX_WORDS = 300;
+
+const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
+/**
+ * Cắt còn tối đa MAX_WORDS từ. Cắt THEO CÂU để không đứt giữa chừng, và luôn GIỮ dòng cuối cùng
+ * có chữ — đó là dòng CTA ("Comment YES for full story 👇"), thứ duy nhất kéo được comment; cắt
+ * thô từ cuối lên sẽ ăn mất nó.
+ */
+function capWords(text: string): string {
+  if (wordCount(text) <= MAX_WORDS) return text;
+
+  const lines = text.split('\n');
+  let ctaIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim()) {
+      ctaIdx = i;
+      break;
+    }
+  }
+  const cta = ctaIdx >= 0 ? lines[ctaIdx].trim() : '';
+  const body = (ctaIdx >= 0 ? lines.slice(0, ctaIdx).join('\n') : text).trim();
+  const budget = MAX_WORDS - wordCount(cta);
+  if (budget <= 0) return cta; // CTA tự nó đã quá dài (mẫu bị sửa lạ) — thà giữ mỗi CTA.
+
+  const sentences = body.match(/[^.!?…\n]+[.!?…]*\s*/g) ?? [body];
+  let kept = '';
+  for (const s of sentences) {
+    if (wordCount(kept + s) > budget) break;
+    kept += s;
+  }
+  // Câu đầu tiên đã dài hơn cả budget (caption một mạch không dấu chấm) — đành cắt theo từ.
+  if (!kept.trim()) kept = body.split(/\s+/).filter(Boolean).slice(0, budget).join(' ');
+
+  return cta ? `${kept.trim()}\n\n${cta}` : kept.trim();
+}
+
 interface CommentRow {
   is_page_author: boolean;
   message: string | null;
@@ -65,8 +105,12 @@ export async function generatePart2Fallbacks(db: SupabaseClient = createWorkerSu
     const prompt = template.replace(/\{\{\s*caption\s*\}\}/gi, caption);
     const patch: Record<string, unknown> = { part2_generated_at: new Date().toISOString() };
     try {
-      const text = await generateText(prompt, { model: DEFAULT_MODEL });
-      patch.part2_generated = text.trim();
+      const text = (await generateText(prompt, { model: DEFAULT_MODEL })).trim();
+      const capped = capWords(text);
+      if (capped !== text) {
+        console.warn(`  ↳ Part 2 bài ${p.id} dài ${wordCount(text)} từ — cắt còn ≤${MAX_WORDS}`);
+      }
+      patch.part2_generated = capped;
       patch.part2_generated_error = null;
       generated++;
     } catch (e) {

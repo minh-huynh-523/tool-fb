@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
+import { collapseBlankLines } from "@/lib/comment-text";
 import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
 import { CharCounter } from "./char-counter";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,13 +30,25 @@ export function AddCommentForm({
 
   const overLimit = message.length > FB_COMMENT_MAX_CHARS;
 
+  // Gộp dòng trống thừa khi user rời ô nhập — thấy ngay nội dung thật sẽ đăng, char counter đếm đúng.
+  function tidyMessage() {
+    const clean = collapseBlankLines(message);
+    if (clean !== message) {
+      setMessage(clean);
+      toast.info("Đã gộp các dòng trống thừa trong comment.");
+    }
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!message.trim() && !attachmentUrl.trim()) {
+    // Làm sạch lần cuối: submit bằng bàn phím có thể chưa qua onBlur.
+    const clean = collapseBlankLines(message);
+    if (clean !== message) setMessage(clean);
+    if (!clean.trim() && !attachmentUrl.trim()) {
       toast.error("Cần nội dung hoặc link đính kèm");
       return;
     }
-    if (overLimit) {
+    if (clean.length > FB_COMMENT_MAX_CHARS) {
       toast.error(`Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự — cắt bớt trước khi gửi.`);
       return;
     }
@@ -44,7 +57,7 @@ export function AddCommentForm({
       const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, attachmentUrl, runAt }),
+        body: JSON.stringify({ message: clean, attachmentUrl, runAt }),
       });
       if (!res.ok) {
         toast.error(data.error ?? "Không thêm được comment");
@@ -74,6 +87,7 @@ export function AddCommentForm({
           placeholder="Nội dung comment…"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          onBlur={tidyMessage}
           rows={3}
         />
         <CharCounter value={message} />

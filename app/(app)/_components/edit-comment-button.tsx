@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Loader2, Pencil } from "lucide-react";
 import { isoToVnLocal } from "@/lib/date";
 import { fetchJson } from "@/lib/fetch-json";
+import { collapseBlankLines } from "@/lib/comment-text";
 import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
 import { CharCounter } from "./char-counter";
 import { Button } from "@/components/ui/button";
@@ -45,19 +46,31 @@ export function EditCommentButton({
   // Chỉ sửa được khi chưa gửi (PENDING) hoặc gửi lỗi (FAILED -> sửa xong thử lại).
   if (comment.status !== "PENDING" && comment.status !== "FAILED") return null;
 
+  // Gộp dòng trống thừa khi user rời ô nhập — thấy ngay nội dung thật sẽ đăng, char counter đếm đúng.
+  function tidyMessage() {
+    const clean = collapseBlankLines(message);
+    if (clean !== message) {
+      setMessage(clean);
+      toast.info("Đã gộp các dòng trống thừa trong comment.");
+    }
+  }
+
   async function save() {
-    if (!message.trim() && !attachmentUrl.trim()) {
+    // Làm sạch lần cuối: lưu bằng bàn phím có thể chưa qua onBlur.
+    const clean = collapseBlankLines(message);
+    if (clean !== message) setMessage(clean);
+    if (!clean.trim() && !attachmentUrl.trim()) {
       toast.error("Cần nội dung hoặc link đính kèm");
       return;
     }
-    if (message.length > FB_COMMENT_MAX_CHARS) {
+    if (clean.length > FB_COMMENT_MAX_CHARS) {
       toast.error(`Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự — cắt bớt trước khi lưu.`);
       return;
     }
     setLoading(true);
     try {
       // Chỉ gửi runAt khi user THẬT SỰ đổi giờ — giữ nguyên run_after gốc (kể cả giây buffer).
-      const payload: Record<string, string> = { message, attachmentUrl };
+      const payload: Record<string, string> = { message: clean, attachmentUrl };
       if (runAt !== isoToVnLocal(comment.run_after)) payload.runAt = runAt;
       const { res, data } = await fetchJson(`/api/posts/${postDbId}/comments/${comment.id}`, {
         method: "PATCH",
@@ -114,6 +127,7 @@ export function EditCommentButton({
               className={expanded ? "max-h-[50vh] overflow-y-auto" : ""}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
+              onBlur={tidyMessage}
             />
             <CharCounter value={message} />
             {longMessage && (

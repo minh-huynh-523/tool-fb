@@ -61,22 +61,66 @@ npm run dev        # http://localhost:3000
 2. Khai **tất cả** biến env ở **Project Settings → Environment Variables**.
 3. Deploy. Test lại luồng trên domain `*.vercel.app`.
 
-### Cron production (bắt buộc — comment hẹn giờ + sync tự động)
+### Cron production
 
-App serverless **không có đồng hồ nền** — comment hẹn giờ chỉ được gửi khi có request gõ vào endpoint cron. Ticker chạy **ngay trong Supabase** (pg_cron + pg_net), không cần dịch vụ thứ ba:
+Vercel chỉ còn là UI — mọi việc chạy nền nằm ở **Supabase Edge Function**, hẹn giờ bằng **pg_cron +
+pg_net ngay trong Supabase** (migration 0025/0026/0029). Không có route `/api/cron/*` nào nữa.
 
-1. Deploy xong, lấy URL production.
-2. Mở `supabase/migrations/0005_pg_cron_sync.sql`, thay `<APP_URL>` + `<CRON_SECRET>` → dán vào **Supabase SQL Editor** chạy.
-3. Job `fb-dashboard-sync` sẽ gọi mỗi phút:
+| job | nhịp | gọi Edge Function | làm gì |
+|---|---|---|---|
+| `fb-dashboard-process-comments` | `*/5` | `process-comments` | lưới an toàn: gửi `scheduled_comment` tới hạn |
+| `fb-dashboard-wp-content` | `*/10` | `wp-content` | Stage 2 auto-publish: Gemini sinh bài WP |
+| `fb-dashboard-wp-publish` | `*/10` | `wp-publish` | Stage 3: đăng WordPress + comment FB |
 
+**`fb-dashboard-sync` đã bị TẮT có chủ ý** (migration 0029) — sync chạy **bấm tay** bằng nút
+*"Đồng bộ tất cả page"* ở `/posts` và `/wp-needed`. Lý do: chuỗi cron → Edge Function → PostgREST
+là nguồn egress lớn nhất của project (đo được 31.390 request/24h, gần như 100% từ Edge Function
+chứ không phải người dùng), trong khi sync mỗi 5 phút không mang lại gì tương xứng.
+
+> ⚠ `sync-pages` chạy trọn chuỗi `sync → backup ảnh → enqueue auto-publish → gửi comment tới hạn`,
+> nên **backup ảnh và enqueue auto-publish cũng thành thủ công theo**. Muốn auto-publish chạy hết
+> một vòng ngay thì bấm *"Chạy auto-publish ngay"* ở `/prompts`. Việc reconcile reel lên lịch cũng
+> chỉ xảy ra lúc bấm sync ⇒ comment hẹn cho reel chờ tới lúc đó (quá 24h thì tự chuyển `FAILED`
+> kèm lý do, không kẹt `PENDING` im lặng).
+>
+> Muốn quay lại sync tự động: `cron.schedule('fb-dashboard-sync', '0 * * * *', ...)` theo đúng khuôn
+> trong `0029_cron_manual_sync.sql`. Đừng đặt cron riêng cho `auto-publish-enqueue` — nó chỉ xét bài
+> đã có trong DB, không sync thì không có gì để xét.
+
+Kiểm tra: `select jobname, schedule, active from cron.job order by jobname;` và
+`select * from cron.job_run_details order by start_time desc limit 5;`
+
+### Chuyển sang một project Supabase khác
+
+Toàn bộ việc chuyển nằm trong `scripts/switch-supabase-project.sh` (idempotent, chạy được từng bước):
+
+```bash
+export SUPABASE_ACCESS_TOKEN=...   # PAT của TÀI KHOẢN SỞ HỮU project mới
+export NEW_SERVICE_ROLE_KEY=...    # Project Settings -> API Keys
+export NEW_DB_PASSWORD=...         # Project Settings -> Database
+export NEW_PROJECT_REF=<ref>       # mặc định: cajlcemkxycjssxqehyb
+
+./scripts/switch-supabase-project.sh        # 1..6
+./scripts/switch-supabase-project.sh 4 5    # chỉ deploy function + set secret
 ```
-GET https://<app>.vercel.app/api/cron/sync-pages?secret=<CRON_SECRET>
-```
 
-Endpoint này làm trọn 1 vòng: **sync** bài mới + reel lên lịch (Business Suite) → **reconcile** reel vừa publish (Meta đổi post id) → **gửi comment** tới hạn. Kiểm tra: `select * from cron.job_run_details order by start_time desc limit 5;`
+Sáu bước: link CLI → nạp vault secret → `db push` → deploy 5 Edge Function → `secrets set`
+→ verify + sửa `.env.local`.
 
-> Local dev: pg_net không gọi được localhost — chạy loop giả cron:
-> `while true; do curl -s "http://localhost:3000/api/cron/sync-pages?secret=$CRON_SECRET" >/dev/null; sleep 60; done`
+> `supabase migration up` KHÔNG thay được script này: không có cờ thì nó áp vào **database local
+> (Docker)**, muốn chạm project thật phải `--linked`; và migration chỉ là 1 trong 6 bước — thiếu
+> vault secret thì 4 cron job tạo ra URL `null` và fail mọi lượt, còn Edge Function thì không tự
+> deploy.
+
+Hai vault secret pg_cron cần (bước 2 tự nạp, hoặc dán tay vào SQL Editor **trước** khi push):
+
+| secret | giá trị |
+|---|---|
+| `fb_dashboard_edge_bearer` | service_role key của project |
+| `fb_dashboard_edge_base_url` | `https://<ref>.supabase.co` |
+
+Migration 0025/0026 đọc cả hai lúc job **chạy**, nên không file nào trong repo chứa ref project hay
+service_role key — áp lại lên project nào cũng đúng.
 
 ---
 
@@ -95,10 +139,9 @@ app/
     pages/  posts/  posts/[id]/
     _components/            client components (form, actions, badge)
   api/
-    pages/ (+[pageId]/sync, [pageId]/test-token, sync-all)
+    pages/ (+[pageId]/sync, [pageId]/test-token, sync-all)  proxy mỏng -> Edge Function sync-pages
     posts/[postDbId]/comments   inline delay 5s
-    cron/sync-pages              ticker chính: sync + reconcile + gửi comment (CRON_SECRET)
-    cron/process-comments        chỉ gửi comment (safety-net phụ, CRON_SECRET)
+    auto-publish/run             proxy -> enqueue + wp-content + wp-publish (nút bấm tay)
 lib/
   supabase/{server,client,admin}.ts
   facebook/{config,client}.ts

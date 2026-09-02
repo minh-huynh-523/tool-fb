@@ -39,12 +39,15 @@ export function CompetitorPostsTable({
   pageId,
   sheetCopiedAt,
   lastScrapedAt,
+  newestPostAt,
 }: {
   posts: CompetitorPostWithComments[];
   pageHandle: string;
   pageId: string;
   sheetCopiedAt: string | null;
   lastScrapedAt: string | null;
+  /** Bài mới nhất của CẢ page — `posts` giờ chỉ là 1 trang nên không suy ra từ posts[0] được. */
+  newestPostAt: string | null;
 }) {
   // Link Source: cùng 1 giá trị cho mọi dòng (đang xem 1 page) nhưng vẫn để mỗi dòng một ô,
   // để copy cả hàng ra sheet là đủ 5 cột, không phải tự điền lại nguồn.
@@ -92,6 +95,7 @@ export function CompetitorPostsTable({
           pageId={pageId}
           sheetCopiedAt={sheetCopiedAt}
           lastScrapedAt={lastScrapedAt}
+          newestPostAt={newestPostAt}
           selectedIds={selected}
         />
       </div>

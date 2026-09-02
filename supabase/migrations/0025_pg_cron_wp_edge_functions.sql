@@ -14,11 +14,20 @@
 --     FACEBOOK_GRAPH_VERSION=...
 -- ) — SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY Supabase TỰ bơm vào mọi Edge Function, không cần set.
 --
--- Thay <PROJECT_REF> (vd abcdefgh) và <SERVICE_ROLE_KEY> bên dưới rồi chạy. Edge Function mặc định
--- yêu cầu JWT hợp lệ — dùng chính service_role key làm Bearer token cho pg_net gọi vào.
+-- Edge Function mặc định yêu cầu JWT hợp lệ — pg_net dùng chính service_role key làm Bearer token.
+-- Host project + service_role key KHÔNG nằm trong file này: cả hai đọc từ Supabase Vault lúc job
+-- CHẠY (xem migration 0026 để biết vì sao — bản gốc commit placeholder <PROJECT_REF>/<SERVICE_ROLE_KEY>
+-- rồi thay tay, và đã bị một lượt `db push` từ ổ đĩa xoá mất giá trị thật). Nhờ vậy file này áp lại
+-- được lên BẤT KỲ project nào (kể cả project mới) mà không phải sửa gì.
+--
+-- ⚠️ BƯỚC THỦ CÔNG 1 LẦN cho mỗi project — chạy TRƯỚC `supabase db push`, xem
+-- scripts/switch-supabase-project.sh (bước 2) hoặc dán vào SQL Editor:
+--   select vault.create_secret('<SERVICE_ROLE_KEY>',            'fb_dashboard_edge_bearer',   '...');
+--   select vault.create_secret('https://<ref>.supabase.co',     'fb_dashboard_edge_base_url', '...');
 
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
+create extension if not exists supabase_vault;
 
 do $$
 begin
@@ -38,9 +47,10 @@ select cron.schedule(
   '*/5 * * * *',              -- mỗi 5 phút — không cần dày như sync-pages, Gemini/WP đắt hơn nhiều
   $$
   select net.http_post(
-    url := 'https://<PROJECT_REF>.supabase.co/functions/v1/wp-content',
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_base_url')
+           || '/functions/v1/wp-content',
     headers := jsonb_build_object(
-      'Authorization', 'Bearer <SERVICE_ROLE_KEY>',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_bearer'),
       'Content-Type', 'application/json'
     ),
     body := '{}'::jsonb,
@@ -54,9 +64,10 @@ select cron.schedule(
   '*/5 * * * *',
   $$
   select net.http_post(
-    url := 'https://<PROJECT_REF>.supabase.co/functions/v1/wp-publish',
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_base_url')
+           || '/functions/v1/wp-publish',
     headers := jsonb_build_object(
-      'Authorization', 'Bearer <SERVICE_ROLE_KEY>',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_bearer'),
       'Content-Type', 'application/json'
     ),
     body := '{}'::jsonb,

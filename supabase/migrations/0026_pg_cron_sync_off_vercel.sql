@@ -23,14 +23,25 @@
 -- (và toàn bộ SQL bên dưới) KHÔNG chứa bất kỳ secret nào, nên áp lại bao nhiêu lần cũng an toàn,
 -- không cần "chạy tay thay placeholder" nữa.
 --
--- ⚠️ BƯỚC THỦ CÔNG 1 LẦN (không nằm trong file này, vì cần giá trị secret thật):
+-- ⚠️ BƯỚC THỦ CÔNG 1 LẦN mỗi project (không nằm trong file này, vì cần giá trị thật):
 --   select vault.create_secret(
 --     '<SERVICE_ROLE_KEY thật>',
 --     'fb_dashboard_edge_bearer',
 --     'service_role key dùng bởi pg_cron để gọi Edge Function của project này'
 --   );
--- Chạy 1 lần trong SQL Editor (hoặc qua Management API) — sau đó KHÔNG cần đụng lại, mọi cron job
--- bên dưới tự đọc lại từ vault.decrypted_secrets mỗi lần chạy.
+--   select vault.create_secret(
+--     'https://<PROJECT_REF>.supabase.co',
+--     'fb_dashboard_edge_base_url',
+--     'host Supabase của project này — pg_cron ghép ra URL Edge Function'
+--   );
+-- Chạy 1 lần trong SQL Editor, hoặc để scripts/switch-supabase-project.sh (bước 2) làm — sau đó
+-- KHÔNG cần đụng lại, mọi cron job bên dưới tự đọc lại từ vault.decrypted_secrets mỗi lần chạy.
+--
+-- Vì sao host cũng vào vault (khác bản đầu của file này, vốn hardcode ref project): hardcode ref
+-- làm file chỉ đúng với ĐÚNG 1 project — áp lên project khác là cron gọi nhầm sang project cũ.
+-- Cùng lý do, các job bên dưới định danh THEO TÊN (cron.schedule upsert theo jobname) chứ không
+-- theo jobid: jobid chỉ đúng trên project đã có sẵn lịch sử migration, còn trên project trống
+-- alter_job(6) sẽ lỗi "job 6 does not exist" và làm hỏng cả `supabase db push`.
 --
 -- Trước khi chạy phần cron.schedule/alter_job bên dưới: đã deploy đủ 2 Edge Function mới
 --   supabase functions deploy sync-pages
@@ -44,11 +55,13 @@ create extension if not exists supabase_vault;
 
 -- sync-pages chạy hết ~55s với 8 page thật (đã đo) — timeout rộng hơn 0025 (55s) để không cắt
 -- ngang khi có thêm page/bài trong tương lai.
-select cron.alter_job(
-  3, -- jobid của fb-dashboard-sync (migration 0005)
-  command => $$
+select cron.schedule(
+  'fb-dashboard-sync',  -- job của migration 0005; cron.schedule() upsert THEO TÊN
+  '*/5 * * * *',
+  $$
   select net.http_post(
-    url := 'https://wevdllaqnypiqlqxdmkc.supabase.co/functions/v1/sync-pages',
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_base_url')
+           || '/functions/v1/sync-pages',
     headers := jsonb_build_object(
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_bearer'),
       'Content-Type', 'application/json'
@@ -71,7 +84,8 @@ select cron.schedule(
   '*/2 * * * *',
   $$
   select net.http_post(
-    url := 'https://wevdllaqnypiqlqxdmkc.supabase.co/functions/v1/process-comments',
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_base_url')
+           || '/functions/v1/process-comments',
     headers := jsonb_build_object(
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_bearer'),
       'Content-Type', 'application/json'
@@ -85,11 +99,13 @@ select cron.schedule(
 -- Nhân tiện hardening luôn 2 job của migration 0025 (wp-content/wp-publish) sang cùng cơ chế vault
 -- — chúng đang hoạt động đúng nhờ đã set giá trị thật ngoài band, nhưng vẫn mang y hệt rủi ro "bị
 -- ai/thứ gì áp lại file 0025 gốc (còn placeholder) đè mất" như vừa xảy ra với job này.
-select cron.alter_job(
-  6, -- fb-dashboard-wp-content (migration 0025)
-  command => $$
+select cron.schedule(
+  'fb-dashboard-wp-content',  -- job của migration 0025; cron.schedule() upsert THEO TÊN
+  '*/5 * * * *',
+  $$
   select net.http_post(
-    url := 'https://wevdllaqnypiqlqxdmkc.supabase.co/functions/v1/wp-content',
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_base_url')
+           || '/functions/v1/wp-content',
     headers := jsonb_build_object(
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_bearer'),
       'Content-Type', 'application/json'
@@ -99,11 +115,13 @@ select cron.alter_job(
   );
   $$
 );
-select cron.alter_job(
-  7, -- fb-dashboard-wp-publish (migration 0025)
-  command => $$
+select cron.schedule(
+  'fb-dashboard-wp-publish',  -- job của migration 0025; cron.schedule() upsert THEO TÊN
+  '*/5 * * * *',
+  $$
   select net.http_post(
-    url := 'https://wevdllaqnypiqlqxdmkc.supabase.co/functions/v1/wp-publish',
+    url := (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_base_url')
+           || '/functions/v1/wp-publish',
     headers := jsonb_build_object(
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'fb_dashboard_edge_bearer'),
       'Content-Type', 'application/json'
@@ -117,7 +135,9 @@ select cron.alter_job(
 -- Kiểm tra job:               select * from cron.job;
 -- Xem lịch sử chạy:           select * from cron.job_run_details order by start_time desc limit 10;
 -- Xem response HTTP:          select * from net._http_response order by created desc limit 10;
--- Xác nhận không còn secret/placeholder nào trong cron.job (chạy sau khi áp xong):
---   select jobid, jobname, command like '%<PROJECT_REF>%' as has_placeholder,
+-- Xác nhận không còn secret/placeholder/ref hardcode nào trong cron.job (chạy sau khi áp xong):
+--   select jobid, jobname,
+--          command like '%<PROJECT_REF>%'          as has_placeholder,
+--          command like '%.supabase.co%'           as has_hardcoded_host,
 --          command like '%vault.decrypted_secrets%' as uses_vault
---   from cron.job;
+--   from cron.job order by jobid;

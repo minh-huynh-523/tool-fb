@@ -35,6 +35,7 @@ export function ExportSheetButton({
   pageId,
   sheetCopiedAt,
   lastScrapedAt,
+  newestPostAt,
   selectedIds,
   windowHours = 6,
 }: {
@@ -43,6 +44,12 @@ export function ExportSheetButton({
   pageId: string;
   sheetCopiedAt: string | null;
   lastScrapedAt: string | null;
+  /**
+   * Bài mới nhất của CẢ page. Phải truyền từ ngoài chứ không lấy posts[0]: `posts` giờ là một
+   * trang (xem getCompetitorPageWithPosts), nên ở trang 2 trở đi posts[0] là bài cũ hơn và badge
+   * "đã copy" sẽ đọc sai mốc.
+   */
+  newestPostAt: string | null;
   /** Dòng đang tick ở bảng. Có tick = copy đúng mấy bài đó, bỏ qua cửa sổ giờ. */
   selectedIds: Set<string>;
   windowHours?: number;
@@ -51,7 +58,7 @@ export function ExportSheetButton({
   const router = useRouter();
 
   const now = useNow();
-  const state = sheetState(sheetCopiedAt, posts[0]?.fb_created_at ?? null, lastScrapedAt, now);
+  const state = sheetState(sheetCopiedAt, newestPostAt, lastScrapedAt, now);
 
   // Có tick dòng nào không? Quyết định luôn cả tập bài lẫn nhãn nút.
   const bySelection = selectedIds.size > 0;

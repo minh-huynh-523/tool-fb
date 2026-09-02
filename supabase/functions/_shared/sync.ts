@@ -136,11 +136,18 @@ export async function syncPage(db: SupabaseClient, pageId: string, opts: { limit
     }
     const stillUnpublished = new Set(unpublishedVideos.map((v) => v.id));
     {
+      // CHỈ lấy placeholder (fb_post_id là video-id TRẦN, không có "_") — bài lên lịch bình thường
+      // không cần reconcile, mà `message` của chúng là caption dài cả KB nên kéo về mỗi lượt sync
+      // là tốn egress không công.
+      // ⚠ '*' là wildcard của PostgREST, '\_' mới là gạch dưới đúng nghĩa; quên escape thì '_' hoá
+      // wildcard 1 ký tự và điều kiện mất tác dụng trong im lặng — nên vế .filter() bằng JS bên
+      // dưới GIỮ NGUYÊN làm lưới hứng, đằng nào cũng phải lọc stillUnpublished ở đó.
       const { data: pending } = await db
         .from("post")
         .select("id, fb_post_id, message")
         .eq("page_id", pageId)
-        .eq("is_published", false);
+        .eq("is_published", false)
+        .not("fb_post_id", "like", "*\\_*");
       const placeholders = ((pending ?? []) as { id: string; fb_post_id: string; message: string | null }[]).filter(
         (r) => !r.fb_post_id.includes("_") && !stillUnpublished.has(r.fb_post_id),
       );
@@ -159,7 +166,23 @@ export async function syncPage(db: SupabaseClient, pageId: string, opts: { limit
         if (!realId || realId === ph.fb_post_id) continue;
 
         let commentsPostId = ph.id;
-        const { error: mvErr } = await db.from("post").update({ fb_post_id: realId }).eq("id", ph.id);
+        // image_backup_at = null ⇒ BẮT backupPostImages chụp lại ảnh cho bài này.
+        //
+        // Lúc còn là reel chưa lên sóng, media_url là `picture` của video — thumbnail bé tí (đo
+        // thật: 160x284, 11 KB). Lượt backup đầu chộp đúng cái đó rồi set image_backup_at, và vì
+        // backupPostImages chỉ nhặt row có image_backup_at IS NULL nên ảnh bé đó ở lại vĩnh viễn —
+        // kể cả sau khi bài lên sóng và feed đã trả ảnh 720x900.
+        //
+        // Hậu quả đi rất xa: Stage 2 lấy image_url = image_backup_url, Stage 3 upload nó làm
+        // featured image của bài WordPress, rồi Rank Math BỎ QUA og:image vì ảnh dưới ngưỡng
+        // 200x200 của Facebook ⇒ link "Full story" share ra không có ảnh preview.
+        //
+        // KHÔNG xoá image_backup_url: nếu lượt chụp lại hỏng thì vẫn còn ảnh cũ để dùng, còn hơn
+        // mất trắng (backupPostImages chỉ ghi đè image_backup_url khi tải thành công).
+        const { error: mvErr } = await db
+          .from("post")
+          .update({ fb_post_id: realId, image_backup_at: null, image_backup_error: null })
+          .eq("id", ph.id);
         if (mvErr) {
           const { data: live } = await db.from("post").select("id").eq("fb_post_id", realId).maybeSingle();
           if (!live) {

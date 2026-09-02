@@ -331,8 +331,7 @@ export interface ListAutoPublishQueueResult {
 // xuyên suốt mọi bài: bài nào đang chờ/đang sinh nội dung Gemini, bài nào đang chờ/đã đăng WP,
 // bài nào lỗi. Gộp wp_content_queue + wp_publish_queue theo post_id, ưu tiên hàng 'publish' (giai
 // đoạn sau) — cùng logic precedence với listPostsWithCommentStatus/getPostWithComments ở trên.
-// Merge ở JS vì PostgREST không UNION được; 2 bảng còn nhỏ (auto-publish mới ra) nên fetch hết
-// rồi paginate trong JS, chưa cần UNION SQL.
+// Việc gộp nằm ở view SQL auto_publish_queue (migration 0030) chứ không còn merge trong JS.
 export async function listAutoPublishQueue(filter: {
   status?: string;
   page?: number;
@@ -342,54 +341,40 @@ export async function listAutoPublishQueue(filter: {
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 20));
 
-  const [{ data: contentRows, error: cErr }, { data: publishRows, error: pErr }] = await Promise.all([
-    db.from('wp_content_queue').select('post_id, status, attempts, error, created_at').order('created_at', { ascending: false }),
-    db
-      .from('wp_publish_queue')
-      .select('post_id, status, attempts, error, permalink, created_at')
-      .order('created_at', { ascending: false }),
-  ]);
-  if (cErr) throw cErr;
-  if (pErr) throw pErr;
+  // View auto_publish_queue (migration 0030) đã gộp sẵn 2 bảng theo đúng precedence 'publish' >
+  // 'content', nên lọc/sắp xếp/phân trang đẩy được hết xuống Postgres. Trước đây đoạn này kéo
+  // TOÀN BỘ cả 2 bảng về rồi merge + slice trong JS — mỗi lượt xem trang phải trả giá cho cả
+  // lịch sử hàng đợi, mà hàng đợi thì chỉ có dài thêm.
+  const offset = (page - 1) * pageSize;
+  let q = db
+    .from('auto_publish_queue')
+    .select('post_id, stage, status, attempts, error, permalink, created_at', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + pageSize - 1);
+  if (filter.status) q = q.eq('status', filter.status);
 
-  const merged = new Map<string, AutoPublishQueueRow>();
-  for (const c of (contentRows ?? []) as { post_id: string; status: string; attempts: number; error: string | null; created_at: string }[]) {
-    merged.set(c.post_id, {
-      postId: c.post_id,
-      post: null,
-      stage: 'content',
-      status: c.status,
-      attempts: c.attempts,
-      error: c.error,
-      permalink: null,
-      createdAt: c.created_at,
-    });
-  }
-  for (const p of (publishRows ?? []) as {
+  const { data, count, error: qErr } = await q;
+  if (qErr) throw qErr;
+
+  const total = count ?? 0;
+  const rows: AutoPublishQueueRow[] = ((data ?? []) as {
     post_id: string;
+    stage: 'content' | 'publish';
     status: string;
     attempts: number;
     error: string | null;
     permalink: string | null;
     created_at: string;
-  }[]) {
-    merged.set(p.post_id, {
-      postId: p.post_id,
-      post: null,
-      stage: 'publish',
-      status: p.status,
-      attempts: p.attempts,
-      error: p.error,
-      permalink: p.permalink,
-      createdAt: p.created_at,
-    });
-  }
-
-  let rows = Array.from(merged.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  if (filter.status) rows = rows.filter((r) => r.status === filter.status);
-  const total = rows.length;
-  const offset = (page - 1) * pageSize;
-  rows = rows.slice(offset, offset + pageSize);
+  }[]).map((r) => ({
+    postId: r.post_id,
+    post: null,
+    stage: r.stage,
+    status: r.status,
+    attempts: r.attempts,
+    error: r.error,
+    permalink: r.permalink,
+    createdAt: r.created_at,
+  }));
 
   if (rows.length) {
     const ids = rows.map((r) => r.postId);
@@ -495,26 +480,67 @@ export interface CompetitorPostWithComments extends CompetitorPostRow {
 export interface CompetitorPageDetail {
   page: CompetitorPageRow;
   posts: CompetitorPostWithComments[];
+  total: number;
+  pageNum: number;
+  pageSize: number;
+  /**
+   * Giờ đăng của bài MỚI NHẤT của page — tính trên toàn bộ page, không phải trên trang đang xem.
+   * Cần tách ra vì badge "đã copy sang Sheet" (lib/sheet-state.ts) so mốc copy với bài mới nhất:
+   * lấy posts[0] chỉ đúng ở trang 1, sang trang 2 nó là bài cũ hơn và badge sẽ nói dối.
+   */
+  newestPostAt: string | null;
 }
 
-export async function getCompetitorPageWithPosts(id: string): Promise<CompetitorPageDetail | null> {
+export const COMPETITOR_POSTS_PAGE_SIZE = 50;
+
+export async function getCompetitorPageWithPosts(
+  id: string,
+  opts: { page?: number; pageSize?: number } = {},
+): Promise<CompetitorPageDetail | null> {
   const db = createSupabaseAdmin();
-  const { data: page, error } = await db.from('competitor_page').select('*').eq('id', id).maybeSingle();
+  const pageNum = Math.max(1, opts.page ?? 1);
+  const pageSize = Math.min(200, Math.max(1, opts.pageSize ?? COMPETITOR_POSTS_PAGE_SIZE));
+
+  // newest_post: cùng thủ thuật embed + order + limit(1) như listCompetitorPages — lấy được bài
+  // mới nhất mà không tốn thêm round-trip nào.
+  const { data: page, error } = await db
+    .from('competitor_page')
+    .select('*, newest_post:competitor_post(fb_created_at)')
+    .eq('id', id)
+    .order('fb_created_at', { referencedTable: 'newest_post', ascending: false, nullsFirst: false })
+    .limit(1, { referencedTable: 'newest_post' })
+    .maybeSingle();
   if (error) throw error;
   if (!page) return null;
+  const { newest_post, ...pageRow } = page as CompetitorPageRow & {
+    newest_post?: Array<{ fb_created_at: string | null }>;
+  };
 
-  const { data: posts } = await db
+  // PHÂN TRANG BẮT BUỘC: mỗi bài mang theo caption + story_analysis + prompt ảnh/video + TOÀN BỘ
+  // comment của nó. Đo trên dữ liệu thật đã là 100–300 KB cho một page đối thủ, và con số đó chỉ
+  // tăng theo mỗi lượt cào — kéo hết về mỗi lần mở trang là kiểu tiêu egress y hệt vòng lặp
+  // comment ở supabase/functions/_shared/comments.ts, chỉ khác là tính theo lượt xem.
+  const offset = (pageNum - 1) * pageSize;
+  const { data: posts, count } = await db
     .from('competitor_post')
-    .select(`${COMPETITOR_POST_COLUMNS}, competitor_comment(*)`)
+    .select(`${COMPETITOR_POST_COLUMNS}, competitor_comment(*)`, { count: 'exact' })
     .eq('competitor_page_id', id)
     .order('fb_created_at', { ascending: false, nullsFirst: false })
-    .order('scraped_at', { ascending: false });
+    .order('scraped_at', { ascending: false })
+    .range(offset, offset + pageSize - 1);
 
   const mapped = (posts ?? []).map((p) => {
     const { competitor_comment, ...rest } = p as CompetitorPostRow & { competitor_comment?: CompetitorCommentRow[] };
     return { ...rest, comments: competitor_comment ?? [] } as CompetitorPostWithComments;
   });
-  return { page: page as CompetitorPageRow, posts: mapped };
+  return {
+    page: pageRow as CompetitorPageRow,
+    posts: mapped,
+    total: count ?? 0,
+    pageNum,
+    pageSize,
+    newestPostAt: newest_post?.[0]?.fb_created_at ?? null,
+  };
 }
 
 // Prompt gửi Gemini ('main' = mega-prompt ảnh/video, 'part2' = fallback Part 2 [0022], 'wp_article'

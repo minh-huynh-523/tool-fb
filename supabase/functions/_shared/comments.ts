@@ -87,7 +87,25 @@ interface ScheduledCommentRow {
   message: string | null;
   attachment_url: string | null;
   attempts: number;
+  run_after: string;
+  status: string;
 }
+
+// Cột tường minh thay cho select('*') — bỏ created_at/sent_at/error/fb_comment_id/claimed_at
+// (không dùng khi gửi). Cùng lý do với POST_COLUMNS ở lib/queries.ts, nhưng gắt hơn: hàng đợi này
+// được kéo về MỖI LƯỢT CRON, nên cột thừa nhân lên theo số lượt chứ không phải theo số row.
+const ROW_COLS = "id, post_id, fb_post_id, page_id, message, attachment_url, attempts, run_after, status";
+
+// "Bài đã reconcile" = fb_post_id dạng <page>_<post>. Reel lên lịch mang video-id TRẦN cho tới khi
+// lên sóng (xem _shared/sync.ts), và comment cho nó thì KHÔNG THỂ gửi.
+// ⚠ '*' là ký tự đại diện của PostgREST, còn '\_' mới là gạch dưới đúng nghĩa — quên escape thì '_'
+// thành wildcard 1 ký tự và filter khớp mọi thứ, tức là mất tác dụng mà không báo lỗi.
+const RECONCILED = "*\\_*";
+
+// PENDING quá ngần này giờ mà bài vẫn chưa reconcile thì bỏ cuộc. BẮT BUỘC phải có: từ khi
+// processDueComments lọc bằng post!inner, những row này không còn được nhặt lên nữa — không có mốc
+// hết hạn thì chúng nằm PENDING im lặng vĩnh viễn và không ai biết comment đã hụt.
+const PENDING_EXPIRE_HOURS = 24;
 
 function fmtError(e: unknown): string {
   if (e instanceof FacebookError) {
@@ -105,8 +123,17 @@ async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promis
 
     // Vẫn là video-id placeholder (không có "_") = bài CHƯA lên sóng/chưa reconcile — nhả về
     // PENDING, lượt sync-pages/process-comments sau tự thử lại sau khi reconcile.
+    //
+    // processDueComments giờ đã lọc hẳn nhóm này ra từ query (vế post!inner), nên nhánh này chỉ
+    // còn chạm tới ở 2 đường hiếm: reclaim 1 row PROCESSING treo, và drainOne gọi thẳng. Vẫn TĂNG
+    // attempts — trước đây nhánh này nhả về PENDING mà không đếm gì, nên không có cách nào phân
+    // biệt "vừa thử lần đầu" với "đã quay vòng 3000 lượt".
     if (!target.includes("_")) {
-      await db.from("scheduled_comment").update({ status: "PENDING", claimed_at: null }).eq("id", row.id).eq("status", "PROCESSING");
+      await db
+        .from("scheduled_comment")
+        .update({ status: "PENDING", claimed_at: null, attempts: (row.attempts ?? 0) + 1 })
+        .eq("id", row.id)
+        .eq("status", "PROCESSING");
       return "SKIPPED";
     }
 
@@ -137,42 +164,49 @@ async function sendComment(db: SupabaseClient, row: ScheduledCommentRow): Promis
   }
 }
 
-async function claimPending(db: SupabaseClient, id: string): Promise<ScheduledCommentRow | null> {
+/**
+ * Giành quyền xử lý 1 row. Trả CÓ/KHÔNG chứ không trả row: người gọi đã cầm sẵn dữ liệu row từ
+ * query danh sách, mà `.select()` trống thì PostgREST trả về NGUYÊN row (kể cả `message` dài vài
+ * KB) chỉ để nói cho ta biết mình có thắng race hay không.
+ */
+async function claimPending(db: SupabaseClient, id: string): Promise<boolean> {
   const { data, error } = await db
     .from("scheduled_comment")
     .update({ status: "PROCESSING", claimed_at: new Date().toISOString() })
     .eq("id", id)
     .eq("status", "PENDING")
     .lte("run_after", new Date().toISOString())
-    .select()
+    .select("id")
     .maybeSingle();
   if (error) throw error;
-  return (data as ScheduledCommentRow) ?? null;
+  return Boolean(data);
 }
 
-async function reclaimProcessing(db: SupabaseClient, id: string, staleCutoffIso: string): Promise<ScheduledCommentRow | null> {
+async function reclaimProcessing(db: SupabaseClient, id: string, staleCutoffIso: string): Promise<boolean> {
   const { data, error } = await db
     .from("scheduled_comment")
     .update({ claimed_at: new Date().toISOString() })
     .eq("id", id)
     .eq("status", "PROCESSING")
     .lte("claimed_at", staleCutoffIso)
-    .select()
+    .select("id")
     .maybeSingle();
   if (error) throw error;
-  return (data as ScheduledCommentRow) ?? null;
+  return Boolean(data);
 }
 
 // Rút MỘT job cụ thể (dùng ngay sau khi Next.js insert 1 comment mới — thay cho after(() =>
 // drainOne(id)) chạy trong tiến trình Vercel trước đây).
 export async function drainOne(db: SupabaseClient, commentId: string): Promise<"SENT" | "FAILED" | "SKIPPED" | "NOT_DUE"> {
-  const { data: row } = await db.from("scheduled_comment").select("run_after,status").eq("id", commentId).maybeSingle();
+  // Lấy đủ cột ngay từ đầu (thay vì chỉ run_after/status rồi để claimPending fetch lại lần nữa):
+  // vẫn đúng 1 lượt GET như trước, nhưng claim sau đó không phải trả row về nữa.
+  const { data: row } = await db.from("scheduled_comment").select(ROW_COLS).eq("id", commentId).maybeSingle();
   if (!row) return "SKIPPED";
-  if ((row as { status: string }).status !== "PENDING") return "SKIPPED";
-  if (new Date((row as { run_after: string }).run_after).getTime() > Date.now()) return "NOT_DUE";
-  const claimed = await claimPending(db, commentId);
-  if (!claimed) return "SKIPPED";
-  return sendComment(db, claimed);
+  const r = row as unknown as ScheduledCommentRow;
+  if (r.status !== "PENDING") return "SKIPPED";
+  if (new Date(r.run_after).getTime() > Date.now()) return "NOT_DUE";
+  if (!(await claimPending(db, r.id))) return "SKIPPED";
+  return sendComment(db, r);
 }
 
 // WORKER quét toàn hàng đợi: PENDING đã tới hạn + PROCESSING treo — dùng bởi Edge Function
@@ -180,39 +214,98 @@ export async function drainOne(db: SupabaseClient, commentId: string): Promise<"
 export async function processDueComments(
   db: SupabaseClient,
   opts: { pendingBufferMs?: number; staleMs?: number; limit?: number } = {},
-): Promise<{ sent: number; failed: number; retried: number; skipped: number; scanned: number }> {
+): Promise<{ sent: number; failed: number; retried: number; skipped: number; scanned: number; expired: number }> {
   const now = Date.now();
   const pendingCutoff = new Date(now - (opts.pendingBufferMs ?? 0)).toISOString();
   const staleCutoff = new Date(now - (opts.staleMs ?? 120_000)).toISOString();
   const limit = opts.limit ?? 50;
 
   const [{ data: pend }, { data: stale }] = await Promise.all([
-    db.from("scheduled_comment").select("*").eq("status", "PENDING").lte("run_after", pendingCutoff).limit(limit),
-    db.from("scheduled_comment").select("*").eq("status", "PROCESSING").lte("claimed_at", staleCutoff).limit(limit),
+    // post!inner + like: CHỈ nhặt row mà bài ĐÃ reconcile. Bài chưa lên sóng thì đừng claim làm gì
+    // — sendComment chỉ nhả nó về PENDING rồi lượt sau lại nhặt đúng nó lên.
+    //
+    // ⚠ Vòng lặp đó là nguyên nhân egress Supabase tăng vọt: đo trên edge_logs 24h thấy 31.390
+    // request, trong đó ~20.000 (2/3) sinh ra bởi ĐÚNG 6 row chết — mỗi row 3 round-trip (PATCH
+    // claim trả nguyên row + GET post + PATCH nhả), × 42 lượt/giờ, vĩnh viễn vì nhánh SKIPPED
+    // không tăng attempts nên chẳng bao giờ chạm trần nào.
+    db
+      .from("scheduled_comment")
+      .select(`${ROW_COLS}, post!inner(fb_post_id)`)
+      .eq("status", "PENDING")
+      .lte("run_after", pendingCutoff)
+      .like("post.fb_post_id", RECONCILED)
+      .limit(limit),
+    db.from("scheduled_comment").select(ROW_COLS).eq("status", "PROCESSING").lte("claimed_at", staleCutoff).limit(limit),
   ]);
 
-  const res = { sent: 0, failed: 0, retried: 0, skipped: 0, scanned: (pend?.length ?? 0) + (stale?.length ?? 0) };
+  // Gỡ khoá embed trước khi dùng: `post` chỉ để lọc, không phải dữ liệu của ScheduledCommentRow
+  // (cùng cách listPostsWithCommentStatus xử lý `scraped_article` ở lib/queries.ts).
+  const pendRows = ((pend ?? []) as unknown as Array<ScheduledCommentRow & { post?: unknown }>).map((r) => {
+    const row = { ...r };
+    delete row.post;
+    return row as ScheduledCommentRow;
+  });
+  const staleRows = (stale ?? []) as unknown as ScheduledCommentRow[];
+
+  const res = { sent: 0, failed: 0, retried: 0, skipped: 0, scanned: pendRows.length + staleRows.length, expired: 0 };
   const tally = (r: "SENT" | "FAILED" | "SKIPPED") => {
     if (r === "SENT") res.sent++;
     else if (r === "FAILED") res.failed++;
     else res.skipped++;
   };
 
-  for (const row of (pend ?? []) as ScheduledCommentRow[]) {
-    const claimed = await claimPending(db, row.id);
-    if (!claimed) {
+  for (const row of pendRows) {
+    if (!(await claimPending(db, row.id))) {
       res.skipped++;
       continue;
     }
-    tally(await sendComment(db, claimed));
+    tally(await sendComment(db, row));
   }
-  for (const row of (stale ?? []) as ScheduledCommentRow[]) {
-    const claimed = await reclaimProcessing(db, row.id, staleCutoff);
-    if (!claimed) {
+  for (const row of staleRows) {
+    if (!(await reclaimProcessing(db, row.id, staleCutoff))) {
       res.skipped++;
       continue;
     }
-    tally(await sendComment(db, claimed));
+    tally(await sendComment(db, row));
   }
+
+  res.expired = await expireUnreachable(db, now, limit);
   return res;
+}
+
+/**
+ * Đánh FAILED những comment mà bài GẮN VỚI NÓ không bao giờ reconcile (reel bị xoá / không lên
+ * sóng). Vế post!inner ở processDueComments cố tình không nhặt chúng lên nữa, nên nếu không có
+ * lượt quét này thì chúng nằm PENDING vĩnh viễn mà không ai biết — im lặng còn tệ hơn tốn egress.
+ *
+ * Rẻ: 1 GET chỉ lấy id (thường rỗng) + tối đa 1 PATCH gộp cho cả lô. Điều kiện `not.like` khớp
+ * đúng phần bù của bộ lọc ở trên, nên KHÔNG bao giờ chạm nhầm row còn gửi được — kể cả row vừa bị
+ * trần `limit` cắt khỏi lượt này.
+ */
+async function expireUnreachable(db: SupabaseClient, now: number, limit: number): Promise<number> {
+  const cutoff = new Date(now - PENDING_EXPIRE_HOURS * 3600_000).toISOString();
+  const { data } = await db
+    .from("scheduled_comment")
+    .select("id, post!inner(fb_post_id)")
+    .eq("status", "PENDING")
+    .lte("run_after", cutoff)
+    .not("post.fb_post_id", "like", RECONCILED)
+    .limit(limit);
+  const ids = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+  if (!ids.length) return 0;
+
+  const { error } = await db
+    .from("scheduled_comment")
+    .update({
+      status: "FAILED",
+      claimed_at: null,
+      error: `Quá ${PENDING_EXPIRE_HOURS}h kể từ giờ hẹn mà bài vẫn chưa lên sóng (fb_post_id còn là video-id lên lịch, chưa reconcile) — bỏ cuộc.`,
+    })
+    .in("id", ids)
+    .eq("status", "PENDING");
+  if (error) {
+    console.error(`[comments] đánh FAILED ${ids.length} comment quá hạn lỗi: ${error.message}`);
+    return 0;
+  }
+  return ids.length;
 }

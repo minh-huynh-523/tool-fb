@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import { ChevronDown, ChevronUp, Loader2, Pencil } from "lucide-react";
 import { isoToVnLocal } from "@/lib/date";
 import { fetchJson } from "@/lib/fetch-json";
-import { collapseBlankLines } from "@/lib/comment-text";
-import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
+import { countLines, limitCommentLines } from "@/lib/comment-text";
+import { FB_COMMENT_MAX_CHARS, FB_COMMENT_MAX_LINES } from "@/lib/constants";
 import { CharCounter } from "./char-counter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,16 +48,21 @@ export function EditCommentButton({
 
   // Gộp dòng trống thừa khi user rời ô nhập — thấy ngay nội dung thật sẽ đăng, char counter đếm đúng.
   function tidyMessage() {
-    const clean = collapseBlankLines(message);
-    if (clean !== message) {
-      setMessage(clean);
-      toast.info("Đã gộp các dòng trống thừa trong comment.");
-    }
+    const clean = limitCommentLines(message, FB_COMMENT_MAX_LINES);
+    if (clean === message) return;
+    const before = countLines(message);
+    setMessage(clean);
+    toast.info(
+      before > FB_COMMENT_MAX_LINES
+        ? `Đã gộp đoạn: ${before} → ${countLines(clean)} dòng. Facebook từ chối comment quá ${FB_COMMENT_MAX_LINES} dòng — không mất chữ nào, chỉ đổi chỗ xuống dòng.`
+        : "Đã gộp các dòng trống thừa trong comment.",
+    );
   }
+
 
   async function save() {
     // Làm sạch lần cuối: lưu bằng bàn phím có thể chưa qua onBlur.
-    const clean = collapseBlankLines(message);
+    const clean = limitCommentLines(message, FB_COMMENT_MAX_LINES);
     if (clean !== message) setMessage(clean);
     if (!clean.trim() && !attachmentUrl.trim()) {
       toast.error("Cần nội dung hoặc link đính kèm");

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { requireUser } from "@/lib/api-guard";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { callEdgeFunction } from "@/lib/edge-functions";
-import { FB_COMMENT_MAX_CHARS } from "@/lib/constants";
+import { FB_COMMENT_MAX_CHARS, FB_COMMENT_MAX_LINES } from "@/lib/constants";
+import { countLines } from "@/lib/comment-text";
 import { vnLocalToISO } from "@/lib/date";
 import type { ScheduledCommentRow } from "@/lib/types";
 
@@ -150,6 +151,18 @@ export async function PATCH(
     return NextResponse.json(
       {
         error: `Comment vượt quá ${FB_COMMENT_MAX_CHARS.toLocaleString("vi-VN")} ký tự (hiện tại: ${finalMessage.length.toLocaleString("vi-VN")}) — Facebook sẽ từ chối.`,
+      },
+      { status: 400 },
+    );
+  }
+
+  // Trần SỐ DÒNG — xem FB_COMMENT_MAX_LINES. Đặc biệt quan trọng ở PATCH: đây chính là đường
+  // "sửa comment FAILED rồi chạy lại", nên nếu không chặn thì user sửa xong lại fail y hệt bằng
+  // đúng cái lỗi 1446042 mù mờ vừa gặp.
+  if (countLines(finalMessage) > FB_COMMENT_MAX_LINES) {
+    return NextResponse.json(
+      {
+        error: `Comment có ${countLines(finalMessage).toLocaleString("vi-VN")} dòng, vượt trần ${FB_COMMENT_MAX_LINES} dòng của Facebook — bấm ra ngoài ô nhập để tự gộp đoạn, nội dung giữ nguyên.`,
       },
       { status: 400 },
     );

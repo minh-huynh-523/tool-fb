@@ -1,13 +1,89 @@
 // Port của lib/comments.ts cho Deno — 2 phần:
-//   1) postFullStoryComment — bản đơn giản hoá riêng cho auto-publish (đăng NGAY 1 comment vừa
-//      tạo, xem lib/auto-publish.ts bản Next.js).
+//   1) attachFullStoryLink — riêng cho auto-publish: nối link WP vào first comment sẵn có của page
+//      (sửa trên FB nếu đã gửi); postFullStoryComment là đường lùi đăng NGAY 1 comment riêng.
 //   2) claimPending/reclaimProcessing/sendComment/processDueComments/drainOne — bản port ĐẦY ĐỦ
 //      của worker rút hàng đợi scheduled_comment chung (mọi comment, không chỉ "Full story"),
 //      dùng bởi Edge Function process-comments (an toàn lưới cho sync-pages + rút ngay sau khi
 //      Next.js insert 1 comment mới, xem app/api/posts/[postDbId]/comments/route.ts).
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2";
-import { createPostComment, FacebookError } from "./facebook.ts";
+import { createPostComment, FacebookError, updateComment } from "./facebook.ts";
 import { decryptToken } from "./crypto.ts";
+
+// Trần của Facebook — mirror lib/constants.ts (FB_COMMENT_MAX_CHARS / FB_COMMENT_MAX_LINES), xem
+// giải thích + số liệu ở đó. Deno không import được lib/ nên chép số.
+const FB_COMMENT_MAX_CHARS = 8000;
+const FB_COMMENT_MAX_LINES = 100;
+
+/**
+ * Stage 3 auto-publish: gắn link WP vào COMMENT SẴN CÓ của page trên bài (comment sớm nhất chưa
+ * FAILED — tức first comment) thay vì tạo comment "Full story" riêng.
+ *   - SENT  → sửa comment đó trên FB (POST /{fb_comment_id}) rồi ghi message mới vào DB.
+ *   - PENDING → chỉ sửa message trong DB, worker gửi ra FB nguyên bản đã có link. Kể cả reel chưa
+ *     reconcile: comment vẫn nằm chờ như cũ, chỉ là giờ đã mang sẵn link.
+ * Rơi về tạo comment mới (postFullStoryComment) khi bài chưa có comment nào, hoặc nối link vào sẽ
+ * vượt trần ký tự/dòng của FB — thà thêm 1 comment còn hơn gộp đoạn/cắt nội dung của người viết.
+ * PROCESSING (worker đang cầm, đã đọc message) thì trả false — sửa lúc này sẽ bị worker đè mất.
+ */
+export async function attachFullStoryLink(db: SupabaseClient, postId: string, permalink: string): Promise<boolean> {
+  const { data: rows, error } = await db
+    .from("scheduled_comment")
+    .select("id, page_id, message, status, fb_comment_id")
+    .eq("post_id", postId)
+    .neq("status", "FAILED")
+    .order("run_after", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (error) return false;
+  const list = (rows ?? []) as Array<{
+    id: string;
+    page_id: string;
+    message: string | null;
+    status: string;
+    fb_comment_id: string | null;
+  }>;
+
+  // Đã có link ở bất kỳ comment nào (lượt trước đã gắn, hoặc user bấm tay "Đăng vào comment").
+  if (list.some((r) => r.message?.includes(permalink))) return true;
+
+  const first = list[0];
+  if (!first) return postFullStoryComment(db, postId, permalink);
+
+  const suffix = `Full story: ${permalink}`;
+  const base = (first.message ?? "").trimEnd();
+  const message = base ? `${base}\n\n${suffix}` : suffix;
+  if (message.length > FB_COMMENT_MAX_CHARS || message.split("\n").length > FB_COMMENT_MAX_LINES) {
+    return postFullStoryComment(db, postId, permalink);
+  }
+
+  if (first.status === "PENDING") {
+    const { data: updated, error: upErr } = await db
+      .from("scheduled_comment")
+      .update({ message })
+      .eq("id", first.id)
+      .eq("status", "PENDING") // optimistic: worker vừa claim thì thôi, không đè
+      .select("id")
+      .maybeSingle();
+    return !upErr && Boolean(updated);
+  }
+
+  if (first.status !== "SENT" || !first.fb_comment_id) return false;
+
+  try {
+    const { data: page, error: pageErr } = await db
+      .from("facebook_page")
+      .select("access_token")
+      .eq("page_id", first.page_id)
+      .maybeSingle();
+    if (pageErr) throw new Error(pageErr.message);
+    if (!page) throw new Error(`Không tìm thấy page ${first.page_id}`);
+
+    await updateComment(first.fb_comment_id, decryptToken(page.access_token), message);
+    await db.from("scheduled_comment").update({ message }).eq("id", first.id);
+    return true;
+  } catch (e) {
+    console.error(`[comments] sửa comment ${first.id} để gắn link WP lỗi: ${fmtError(e)}`);
+    return false;
+  }
+}
 
 export async function postFullStoryComment(db: SupabaseClient, postId: string, permalink: string): Promise<boolean> {
   const message = `Full story: ${permalink}`;
@@ -102,10 +178,12 @@ const ROW_COLS = "id, post_id, fb_post_id, page_id, message, attachment_url, att
 // thành wildcard 1 ký tự và filter khớp mọi thứ, tức là mất tác dụng mà không báo lỗi.
 const RECONCILED = "*\\_*";
 
-// PENDING quá ngần này giờ mà bài vẫn chưa reconcile thì bỏ cuộc. BẮT BUỘC phải có: từ khi
-// processDueComments lọc bằng post!inner, những row này không còn được nhặt lên nữa — không có mốc
-// hết hạn thì chúng nằm PENDING im lặng vĩnh viễn và không ai biết comment đã hụt.
-const PENDING_EXPIRE_HOURS = 24;
+// PENDING quá ngần này giờ mà bài vẫn chưa reconcile thì GHI CẢNH BÁO — KHÔNG bỏ cuộc. Mốc này
+// trước đây đánh FAILED, nhưng sync-pages giờ chạy TAY: bài lên sóng thật vẫn có thể chưa reconcile
+// trong DB sau 24h, và comment bị giết oan. Nay row ở lại PENDING vô thời hạn và tự gửi ở lượt quét
+// đầu tiên sau khi post reconcile. Nằm chờ lâu KHÔNG tốn egress: vế post!inner ở processDueComments
+// vẫn lọc hẳn nhóm chưa reconcile ra khỏi vòng claim/nhả (nguyên nhân sự cố ~20.000 request cũ).
+const PENDING_WARN_HOURS = 24;
 
 function fmtError(e: unknown): string {
   if (e instanceof FacebookError) {
@@ -214,7 +292,7 @@ export async function drainOne(db: SupabaseClient, commentId: string): Promise<"
 export async function processDueComments(
   db: SupabaseClient,
   opts: { pendingBufferMs?: number; staleMs?: number; limit?: number } = {},
-): Promise<{ sent: number; failed: number; retried: number; skipped: number; scanned: number; expired: number }> {
+): Promise<{ sent: number; failed: number; retried: number; skipped: number; scanned: number; stalled: number }> {
   const now = Date.now();
   const pendingCutoff = new Date(now - (opts.pendingBufferMs ?? 0)).toISOString();
   const staleCutoff = new Date(now - (opts.staleMs ?? 120_000)).toISOString();
@@ -247,7 +325,7 @@ export async function processDueComments(
   });
   const staleRows = (stale ?? []) as unknown as ScheduledCommentRow[];
 
-  const res = { sent: 0, failed: 0, retried: 0, skipped: 0, scanned: pendRows.length + staleRows.length, expired: 0 };
+  const res = { sent: 0, failed: 0, retried: 0, skipped: 0, scanned: pendRows.length + staleRows.length, stalled: 0 };
   const tally = (r: "SENT" | "FAILED" | "SKIPPED") => {
     if (r === "SENT") res.sent++;
     else if (r === "FAILED") res.failed++;
@@ -269,26 +347,30 @@ export async function processDueComments(
     tally(await sendComment(db, row));
   }
 
-  res.expired = await expireUnreachable(db, now, limit);
+  res.stalled = await flagStalled(db, now, limit);
   return res;
 }
 
 /**
- * Đánh FAILED những comment mà bài GẮN VỚI NÓ không bao giờ reconcile (reel bị xoá / không lên
- * sóng). Vế post!inner ở processDueComments cố tình không nhặt chúng lên nữa, nên nếu không có
- * lượt quét này thì chúng nằm PENDING vĩnh viễn mà không ai biết — im lặng còn tệ hơn tốn egress.
+ * Gắn CẢNH BÁO lên những comment mà bài gắn với nó vẫn chưa reconcile sau PENDING_WARN_HOURS giờ
+ * (reel chưa lên sóng thật, hoặc chỉ là chưa ai bấm đồng bộ). Vế post!inner ở processDueComments cố
+ * tình không nhặt chúng lên, nên nếu không có lượt quét này thì chúng nằm PENDING im lặng.
  *
- * Rẻ: 1 GET chỉ lấy id (thường rỗng) + tối đa 1 PATCH gộp cho cả lô. Điều kiện `not.like` khớp
- * đúng phần bù của bộ lọc ở trên, nên KHÔNG bao giờ chạm nhầm row còn gửi được — kể cả row vừa bị
- * trần `limit` cắt khỏi lượt này.
+ * KHÔNG đụng tới status — đó là điểm khác bản cũ: trước đây mốc này đánh FAILED, tức comment mất
+ * hẳn và phải bấm thử lại tay; nay row ở lại PENDING và tự gửi ở lượt quét đầu tiên sau khi post
+ * reconcile, dù muộn bao lâu.
+ *
+ * Rẻ và KHÔNG lặp: điều kiện `error is null` khiến mỗi row chỉ bị PATCH đúng 1 lần trong đời, nên
+ * một hàng đợi nằm chờ hàng tuần vẫn chỉ tốn 1 GET (thường rỗng) mỗi lượt cron.
  */
-async function expireUnreachable(db: SupabaseClient, now: number, limit: number): Promise<number> {
-  const cutoff = new Date(now - PENDING_EXPIRE_HOURS * 3600_000).toISOString();
+async function flagStalled(db: SupabaseClient, now: number, limit: number): Promise<number> {
+  const cutoff = new Date(now - PENDING_WARN_HOURS * 3600_000).toISOString();
   const { data } = await db
     .from("scheduled_comment")
     .select("id, post!inner(fb_post_id)")
     .eq("status", "PENDING")
     .lte("run_after", cutoff)
+    .is("error", null)
     .not("post.fb_post_id", "like", RECONCILED)
     .limit(limit);
   const ids = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
@@ -297,14 +379,15 @@ async function expireUnreachable(db: SupabaseClient, now: number, limit: number)
   const { error } = await db
     .from("scheduled_comment")
     .update({
-      status: "FAILED",
-      claimed_at: null,
-      error: `Quá ${PENDING_EXPIRE_HOURS}h kể từ giờ hẹn mà bài vẫn chưa lên sóng (fb_post_id còn là video-id lên lịch, chưa reconcile) — bỏ cuộc.`,
+      error:
+        `Quá ${PENDING_WARN_HOURS}h kể từ giờ hẹn mà bài vẫn chưa lên sóng (fb_post_id còn là ` +
+        `video-id lên lịch, chưa reconcile). Comment VẪN NẰM CHỜ và sẽ tự gửi ngay khi bài ` +
+        `reconcile — bấm "Đồng bộ" nếu bài đã lên sóng rồi.`,
     })
     .in("id", ids)
     .eq("status", "PENDING");
   if (error) {
-    console.error(`[comments] đánh FAILED ${ids.length} comment quá hạn lỗi: ${error.message}`);
+    console.error(`[comments] gắn cảnh báo cho ${ids.length} comment chờ lâu lỗi: ${error.message}`);
     return 0;
   }
   return ids.length;

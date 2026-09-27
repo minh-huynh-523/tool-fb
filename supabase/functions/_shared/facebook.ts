@@ -270,3 +270,16 @@ export async function createPostComment(
     timeoutMs: COMMENT_TIMEOUT_MS,
   });
 }
+
+// Sửa nội dung 1 comment ĐÃ ĐĂNG (POST /{comment-id}). Token phải là token của page đã viết comment
+// đó. Chỉ gửi `message` — không đụng attachment. Lặp lại an toàn (cùng nội dung → cùng kết quả),
+// nên timeout ở đây không có rủi ro sinh trùng như createPostComment.
+export async function updateComment(fbCommentId: string, accessToken: string, message: string): Promise<{ success: boolean }> {
+  return callGraph<{ success: boolean }>({
+    endpoint: fbCommentId,
+    method: "POST",
+    accessToken,
+    body: { message },
+    timeoutMs: COMMENT_TIMEOUT_MS,
+  });
+}

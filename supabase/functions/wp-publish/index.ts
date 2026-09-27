@@ -1,6 +1,7 @@
 // Stage 3 của auto-publish (xem lib/auto-publish.ts bản Next.js — port Y HỆT logic sang Deno):
 // rút wp_publish_queue (đã có title/nội dung/ảnh do Stage 2 sinh sẵn), đăng bài WordPress rồi
-// comment "Full story: {permalink}" vào bài FB gốc. TÁCH riêng khỏi Stage 2 (Gemini) vì WordPress
+// nối "Full story: {permalink}" vào first comment của page trên bài FB gốc (không có thì mới tạo
+// comment riêng — xem attachFullStoryLink). TÁCH riêng khỏi Stage 2 (Gemini) vì WordPress
 // XML-RPC + FB Graph API có độ trễ/kiểu lỗi khác hẳn.
 //
 // Lên lịch bằng pg_cron trong chính Supabase (xem migration 0025) — KHÔNG còn chạy trên Vercel
@@ -8,7 +9,7 @@
 // Vercel Hobby bị PAUSE, nên chuyển hẳn ra khỏi Vercel thay vì chỉ tăng maxDuration).
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { publishWpArticleForPost } from "../_shared/wp-publish.ts";
-import { postFullStoryComment } from "../_shared/comments.ts";
+import { attachFullStoryLink } from "../_shared/comments.ts";
 
 const STALE_MS = 120_000;
 const MAX_ATTEMPTS = 3;
@@ -63,7 +64,7 @@ async function processRow(db: ReturnType<typeof createClient>, row: Row): Promis
 
     // Comment lỗi KHÔNG được coi là cả hàng thất bại — bài WP đã đăng thật, phần comment còn nút
     // "Đăng vào comment" cho user bấm tay bù (Next.js /posts), không mất trắng công đã làm.
-    const commented = result.permalink ? await postFullStoryComment(db, row.post_id, result.permalink) : false;
+    const commented = result.permalink ? await attachFullStoryLink(db, row.post_id, result.permalink) : false;
 
     await db
       .from("wp_publish_queue")
@@ -71,7 +72,7 @@ async function processRow(db: ReturnType<typeof createClient>, row: Row): Promis
         status: "PUBLISHED",
         wp_post_id: result.wpPostId,
         permalink: result.permalink,
-        error: commented ? null : 'Đăng WP xong nhưng comment "Full story" lỗi — bấm tay ở nút "Đăng vào comment"',
+        error: commented ? null : 'Đăng WP xong nhưng gắn link vào comment lỗi — sửa tay comment của bài hoặc bấm "Đăng vào comment"',
       })
       .eq("id", row.id)
       .eq("status", "PROCESSING");
